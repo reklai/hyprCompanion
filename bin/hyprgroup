@@ -5,11 +5,14 @@ app_name="HyprGroup"
 
 usage() {
 	printf '%s\n' \
-		"Usage: hyprgroup [menu|daemon]" \
+		"Usage: hyprgroup [menu|daemon|add|remove|snapshot]" \
 		"" \
 		"Actions:" \
 		"  menu       Toggle the Quickshell action menu" \
-		"  daemon     Start the persistent Quickshell menu process"
+		"  daemon     Start the persistent Quickshell menu process" \
+		"  add        Add the active window to a native Container" \
+		"  remove     Remove the active window from its Container" \
+		"  snapshot   Print the current Container state as JSON"
 }
 
 notify() {
@@ -20,6 +23,28 @@ notify() {
 	else
 		printf '%s: %s\n' "$app_name" "$message" >&2
 	fi
+}
+
+dispatch_output_failed() {
+	local output="$1"
+
+	[[ "$output" == error:* || "$output" == *$'\nerror:'* ]]
+}
+
+run_dispatch() {
+	local dispatcher="$1"
+	local output
+
+	if output="$(hyprctl dispatch "$dispatcher" 2>&1)" && ! dispatch_output_failed "$output"; then
+		return 0
+	fi
+
+	notify "Hyprland did not accept the container command."
+	return 1
+}
+
+state_file() {
+	printf '%s\n' "${XDG_RUNTIME_DIR:-/tmp}/hyprgroup-containers.tsv"
 }
 
 script_path() {
@@ -38,6 +63,241 @@ command_path() {
 	fi
 
 	script_path
+}
+
+active_window_address() {
+	hyprctl activewindow -j 2>/dev/null |
+		jq -r '.address // empty' 2>/dev/null
+}
+
+stored_container_anchor_address() {
+	local state
+
+	state="$(state_file)"
+	[[ -f "$state" ]] || return 1
+
+	awk '
+		BEGIN { FS = "\t" }
+		$1 == "anchor" && $2 ~ /^0x[0-9a-fA-F]+$/ { print $2; found = 1; exit }
+		END { exit found ? 0 : 1 }
+	' "$state"
+}
+
+client_exists() {
+	local address="$1"
+
+	hyprctl clients -j 2>/dev/null |
+		jq -e --arg address "$address" 'any(.[]; .address == $address)' >/dev/null 2>&1
+}
+
+container_anchor_address() {
+	local address
+
+	if address="$(stored_container_anchor_address)" && client_exists "$address"; then
+		printf '%s\n' "$address"
+		return 0
+	fi
+
+	return 1
+}
+
+remember_container_anchor() {
+	local address="${1:-}"
+	local state
+	local tmp
+
+	if [[ -z "$address" ]]; then
+		address="$(active_window_address)" || return 1
+	fi
+
+	[[ "$address" =~ ^0x[0-9a-fA-F]+$ ]] || return 1
+
+	state="$(state_file)"
+	tmp="${state}.$$"
+
+	printf 'anchor\t%s\n' "$address" >"$tmp"
+	mv "$tmp" "$state"
+}
+
+forget_container_anchor() {
+	local state
+
+	state="$(state_file)"
+	: >"$state"
+}
+
+active_window_in_container() {
+	local grouped_count
+	local address
+	local container_address
+
+	if ! command -v jq >/dev/null 2>&1; then
+		return 2
+	fi
+
+	if ! read -r grouped_count address < <(
+		hyprctl activewindow -j 2>/dev/null |
+			jq -r '[((.grouped // []) | length), .address] | @tsv' 2>/dev/null
+	); then
+		return 2
+	fi
+
+	if [[ ! "$grouped_count" =~ ^[0-9]+$ ]]; then
+		return 2
+	fi
+
+	if (( grouped_count > 0 )); then
+		return 0
+	fi
+
+	if container_address="$(container_anchor_address)" && [[ "$address" == "$container_address" ]]; then
+		return 0
+	fi
+
+	return 1
+}
+
+active_window_remove_state() {
+	hyprctl activewindow -j 2>/dev/null |
+		jq -r '
+			.address as $active |
+			(.grouped // []) as $grouped |
+			[
+				($active // ""),
+				($grouped | length),
+				([$grouped[] | tostring | select(. != $active)] | .[0] // "")
+			] | @tsv
+		' 2>/dev/null
+}
+
+empty_snapshot() {
+	printf '%s\n' '{"hasContainer":false,"address":"","title":"No Active Window","className":"","grouped":[],"windows":[],"source":"none"}'
+}
+
+container_snapshot() {
+	if ! command -v jq >/dev/null 2>&1; then
+		empty_snapshot
+		return 0
+	fi
+
+	if ! {
+		hyprctl activewindow -j 2>/dev/null
+		hyprctl clients -j 2>/dev/null
+	} | jq -cs '
+		def window_title($client):
+			(($client.title // "") | if . == "" then "Untitled window" else . end);
+
+		.[0] as $active |
+		(.[1] // []) as $clients |
+		([($active.grouped // [])[]? | tostring] |
+			if length == 0 then [$active.address] else . end) as $grouped |
+		if (($active.address // "") != "" and ($grouped | length) > 0) then
+			{
+				hasContainer: true,
+				address: ($active.address // ""),
+				title: window_title($active),
+				className: ($active.class // ""),
+				grouped: $grouped,
+				windows: [
+					$grouped[] as $address |
+					(($clients | map(select(.address == $address)) | .[0]) //
+						(if (($active.address // "") == $address) then $active else null end)) as $client |
+					{
+						address: $address,
+						title: window_title($client),
+						className: ($client.class // "")
+					}
+				],
+				source: "active"
+			}
+		else
+			{
+				hasContainer: false,
+				address: "",
+				title: "No Active Window",
+				className: "",
+				grouped: [],
+				windows: [],
+				source: "none"
+			}
+		end
+	' 2>/dev/null; then
+		empty_snapshot
+	fi
+}
+
+ensure_active_window_normal() {
+	run_dispatch 'hl.dsp.window.fullscreen({ action = "unset" })'
+	run_dispatch 'hl.dsp.window.float({ action = "off" })'
+}
+
+lock_active_container() {
+	run_dispatch 'hl.dsp.group.lock_active({ action = "lock" })'
+}
+
+create_container_from_active_window() {
+	run_dispatch 'hl.dsp.group.toggle({})'
+	lock_active_container
+}
+
+add_to_group() {
+	local state=0
+
+	if active_window_in_container; then
+		return 0
+	else
+		state=$?
+	fi
+
+	if [[ "$state" -eq 1 ]]; then
+		ensure_active_window_normal || return 1
+		create_container_from_active_window
+		remember_container_anchor || true
+		return
+	fi
+
+	notify "Could not inspect the active window."
+	return 1
+}
+
+remove_window() {
+	local active_address
+	local grouped_count
+	local remaining_address
+	local container_address
+
+	if ! command -v jq >/dev/null 2>&1; then
+		notify "Could not inspect the active window."
+		return 1
+	fi
+
+	if ! read -r active_address grouped_count remaining_address < <(active_window_remove_state); then
+		notify "Could not inspect the active window."
+		return 1
+	fi
+
+	if [[ -z "$active_address" || ! "$grouped_count" =~ ^[0-9]+$ ]]; then
+		notify "Could not inspect the active window."
+		return 1
+	fi
+
+	if (( grouped_count > 0 )); then
+		run_dispatch 'hl.dsp.window.move({ out_of_group = true })' || return 1
+
+		if [[ "$remaining_address" =~ ^0x[0-9a-fA-F]+$ ]]; then
+			remember_container_anchor "$remaining_address" || true
+		else
+			forget_container_anchor || true
+		fi
+
+		return 0
+	fi
+
+	container_address="$(container_anchor_address || true)"
+
+	if [[ -n "$container_address" && "$active_address" == "$container_address" ]]; then
+		forget_container_anchor || true
+	fi
 }
 
 qs_dir() {
@@ -140,6 +400,9 @@ main() {
 	case "$action" in
 		menu) menu ;;
 		daemon) daemon ;;
+		add) add_to_group ;;
+		remove) remove_window ;;
+		snapshot) container_snapshot ;;
 		-h|--help|help) usage ;;
 		*) usage >&2; return 2 ;;
 	esac
