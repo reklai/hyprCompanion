@@ -11,9 +11,11 @@ Use it when several related windows should occupy one workspace slot: editor, te
 - A single remembered Container built on native Hyprland groups.
 - A fast `SUPER + G` Container Menu powered by a resident Quickshell process.
 - Add, move, select, jump, reorder, remove, and close actions for grouped windows.
-- Previous/next cycling through the active group with keyboard and mouse-wheel binds.
+- Previous/next cycling through the HyprGroup-managed Container with keyboard and mouse-wheel binds.
 - Practical tab names from window title or app class, not raw window addresses.
 - Relocatable install: clone it anywhere and point Hyprland at one Lua file.
+
+HyprGroup manages only the Container anchored through `Add to Container`. Native Hyprland groups created manually outside HyprGroup are left alone: they do not appear in the Container Menu, and HyprGroup actions will not select, cycle, reorder, remove, or close their windows.
 
 ## Requirements
 
@@ -93,10 +95,10 @@ Change keybinds there. After the initial `dofile(...)`, users should not need to
 ## Default Binds
 
 - `SUPER + G`: open or close the Container Menu.
-- `SUPER + backslash`: next window in the active group.
-- `SUPER + SHIFT + backslash`: previous window in the active group.
-- `SUPER + mouse_up`: next window in the active group.
-- `SUPER + mouse_down`: previous window in the active group.
+- `SUPER + backslash`: next window in the HyprGroup Container.
+- `SUPER + SHIFT + backslash`: previous window in the HyprGroup Container.
+- `SUPER + mouse_up`: next window in the HyprGroup Container.
+- `SUPER + mouse_down`: previous window in the HyprGroup Container.
 
 ## Container Menu
 
@@ -116,11 +118,11 @@ Change keybinds there. After the initial `dofile(...)`, users should not need to
 +--------------------------+-------------------------------------+
 ```
 
-The menu describes one Container. If focus is outside a group, HyprGroup falls back to the remembered Container, even when that Container is on another workspace.
+The menu describes the single HyprGroup-managed Container. If focus is outside that Container, HyprGroup falls back to the remembered Container, even when that Container is on another workspace. If focus is inside a separate manual Hyprland group, that group is ignored.
 
 ## Actions
 
-- `Add to Container`: move the focused window into the remembered Container when possible.
+- `Add to Container`: move the focused ungrouped window into the remembered Container when possible, or create the first HyprGroup Container. It refuses windows that are already inside a separate native Hyprland group.
 - `Move Container Here`: move every live window in the remembered Container to the current workspace.
 - `Remove from Container`: remove the selected grouped window, or forget a one-window Container.
 - `Close Window Inside Container`: close the selected Container window normally.

@@ -51,9 +51,41 @@ run_dispatch() {
 }
 
 active_window_in_container() {
-	local grouped_count
 	local address
 	local container_address
+	local grouped_has_anchor
+
+	if ! command -v jq >/dev/null 2>&1; then
+		return 2
+	fi
+
+	container_address="$(container_anchor_address || true)"
+
+	if [[ ! "$container_address" =~ ^0x[0-9a-fA-F]+$ ]]; then
+		return 1
+	fi
+
+	if ! read -r address grouped_has_anchor < <(
+		hyprctl activewindow -j 2>/dev/null |
+			jq -r --arg anchor "$container_address" '[.address // "", ((.grouped // []) | index($anchor) != null)] | @tsv' 2>/dev/null
+	); then
+		return 2
+	fi
+
+	if [[ ! "$address" =~ ^0x[0-9a-fA-F]+$ ]]; then
+		return 1
+	fi
+
+	if [[ "$address" == "$container_address" || "$grouped_has_anchor" == "true" ]]; then
+		return 0
+	fi
+
+	group_contains_address "$container_address" "$address"
+}
+
+active_window_in_native_group() {
+	local grouped_count
+	local address
 
 	if ! command -v jq >/dev/null 2>&1; then
 		return 2
@@ -70,11 +102,7 @@ active_window_in_container() {
 		return 2
 	fi
 
-	if (( grouped_count > 0 )); then
-		return 0
-	fi
-
-	if container_address="$(container_anchor_address)" && [[ "$address" == "$container_address" ]]; then
+	if [[ "$address" =~ ^0x[0-9a-fA-F]+$ ]] && (( grouped_count > 0 )); then
 		return 0
 	fi
 
@@ -297,26 +325,16 @@ container_snapshot() {
 
 		.[0] as $active |
 		(.[1] // []) as $clients |
-		([($active.grouped // [])[]? | tostring] | normalize_group(.; ($active.address // ""); $clients)) as $active_grouped |
-		if (($active.address // "") != "" and ($active_grouped | length) > 1) then
-			snapshot($active; $active_grouped; "active"; $clients)
-		else
-			($clients | map(select(.address == $anchor)) | .[0] // null) as $anchor_client |
-			if ($anchor_client != null) then
-				([($anchor_client.grouped // [])[]? | tostring] | normalize_group(.; $anchor; $clients)) as $remembered_grouped |
-				if ($remembered_grouped | length) > 0 then
-					(remembered_active_client($remembered_grouped; $clients; $anchor) // $anchor_client) as $remembered_client |
-					snapshot($remembered_client; $remembered_grouped; "remembered"; $clients)
+		($clients | map(select(.address == $anchor)) | .[0] // null) as $anchor_client |
+		if ($anchor_client != null) then
+			([($anchor_client.grouped // [])[]? | tostring] | normalize_group(.; $anchor; $clients)) as $managed_grouped |
+			if ($managed_grouped | length) > 0 then
+				($active.address // "") as $active_address |
+				if ($active_address != "" and ($managed_grouped | index($active_address))) then
+					snapshot($active; $managed_grouped; "active"; $clients)
 				else
-					{
-						hasContainer: false,
-						address: "",
-						title: "No Active Window",
-						className: "",
-						grouped: [],
-						windows: [],
-						source: "none"
-					}
+					(remembered_active_client($managed_grouped; $clients; $anchor) // $anchor_client) as $remembered_client |
+					snapshot($remembered_client; $managed_grouped; "remembered"; $clients)
 				end
 			else
 				{
@@ -329,6 +347,16 @@ container_snapshot() {
 					source: "none"
 				}
 			end
+		else
+			{
+				hasContainer: false,
+				address: "",
+				title: "No Active Window",
+				className: "",
+				grouped: [],
+				windows: [],
+				source: "none"
+			}
 		end
 	' 2>/dev/null; then
 		empty_snapshot
@@ -553,6 +581,11 @@ add_to_group() {
 	fi
 
 	if [[ "$state" -eq 1 ]]; then
+		if active_window_in_native_group; then
+			notify "Active window is already in another native group."
+			return 1
+		fi
+
 		ensure_active_window_normal || return 1
 		bring_container_to_active_workspace || true
 
@@ -682,16 +715,7 @@ group_contains_address() {
 
 container_has_window() {
 	local address="$1"
-	local active_address
 	local anchor_address
-
-	if active_window_in_container; then
-		active_address="$(active_window_address || true)"
-
-		if [[ "$active_address" =~ ^0x[0-9a-fA-F]+$ ]] && group_contains_address "$active_address" "$address"; then
-			return 0
-		fi
-	fi
 
 	anchor_address="$(container_anchor_address || true)"
 
@@ -831,6 +855,7 @@ remove_window() {
 	local grouped_count
 	local remaining_address
 	local container_address
+	local state=0
 
 	if ! command -v jq >/dev/null 2>&1; then
 		notify "Could not inspect the active window."
@@ -842,6 +867,19 @@ remove_window() {
 	if [[ -n "$address" ]]; then
 		remove_window_by_address "$address"
 		return
+	fi
+
+	if active_window_in_container; then
+		:
+	else
+		state=$?
+
+		if [[ "$state" -eq 2 ]]; then
+			notify "Could not inspect the active window."
+			return 1
+		fi
+
+		return 0
 	fi
 
 	if ! read -r active_address grouped_count remaining_address < <(active_window_remove_state); then
@@ -962,6 +1000,13 @@ reorder_window() {
 		return 1
 	fi
 
+	forget_stale_container_anchor
+
+	if ! container_has_window "$address"; then
+		notify "Window is not in the Container."
+		return 1
+	fi
+
 	mapfile -t group_addresses < <(group_addresses_for_window "$address")
 	group_count="${#group_addresses[@]}"
 
@@ -1009,6 +1054,18 @@ jump_window() {
 
 	if [[ ! "$address" =~ ^0x[0-9a-fA-F]+$ ]]; then
 		notify "Invalid window address."
+		return 1
+	fi
+
+	if ! command -v jq >/dev/null 2>&1; then
+		notify "Could not inspect the Container."
+		return 1
+	fi
+
+	forget_stale_container_anchor
+
+	if ! container_has_window "$address"; then
+		notify "Window is not in the Container."
 		return 1
 	fi
 

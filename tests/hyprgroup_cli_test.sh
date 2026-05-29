@@ -273,6 +273,59 @@ LUA
 	fi
 }
 
+test_lua_setup_routes_cycle_binds_through_script() {
+	local expected
+	local output
+
+	output="$(
+		lua <<LUA
+hl = {}
+
+function hl.config(_)
+end
+
+function hl.exec_cmd(command)
+	print(command)
+end
+
+function hl.bind(bind, dispatcher)
+	print(bind .. " => " .. dispatcher)
+end
+
+hl.dsp = {
+	exec_cmd = function(command)
+		return "exec:" .. command
+	end,
+}
+
+dofile("${repo_root}/lua/hyprgroup.lua").setup({
+	binds = {
+		menu = "",
+		next = "backslash",
+		prev = "SHIFT + backslash",
+		mouse_next = "mouse_up",
+		mouse_prev = "mouse_down",
+	},
+})
+LUA
+	)"
+
+	expected="HYPRGROUP_COMMAND_PATH='${subject}' '${subject}' daemon"
+	expected+=$'\n'
+	expected+="SUPER + mouse_down => exec:'${subject}' prev"
+	expected+=$'\n'
+	expected+="SUPER + mouse_up => exec:'${subject}' next"
+	expected+=$'\n'
+	expected+="SUPER + SHIFT + backslash => exec:'${subject}' prev"
+	expected+=$'\n'
+	expected+="SUPER + backslash => exec:'${subject}' next"
+
+	if [[ "$output" != "$expected" ]]; then
+		printf 'Unexpected Lua cycle bind output:\n%s\n' "$output" >&2
+		return 1
+	fi
+}
+
 test_remove_remembered_one_window_container() {
 	reset_logs
 	write_active '{"address":"0xaaa","monitor":1,"workspace":{"id":1},"grouped":[]}'
@@ -303,6 +356,19 @@ test_remove_outside_container_is_noop() {
 	reset_logs
 	write_active '{"address":"0xccc","monitor":1,"workspace":{"id":1},"grouped":[]}'
 	printf '[{"address":"0xccc","workspace":{"id":1}}]\n' >"$clients_json"
+	: >"$state_file"
+
+	bash "$subject" remove
+
+	assert_file_equals "$dispatch_log" ""
+	assert_file_equals "$state_file" ""
+	assert_no_notifications
+}
+
+test_remove_unmanaged_native_group_is_noop() {
+	reset_logs
+	write_active '{"address":"0xaaa","monitor":1,"workspace":{"id":1},"grouped":["0xaaa","0xbbb"]}'
+	printf '[{"address":"0xaaa","workspace":{"id":1},"grouped":["0xaaa","0xbbb"]},{"address":"0xbbb","workspace":{"id":1},"grouped":["0xaaa","0xbbb"]}]\n' >"$clients_json"
 	: >"$state_file"
 
 	bash "$subject" remove
@@ -445,6 +511,22 @@ test_add_brings_global_container_to_active_workspace() {
 	assert_no_notifications
 }
 
+test_add_rejects_unmanaged_native_group() {
+	reset_logs
+	write_active '{"address":"0xaaa","monitor":1,"workspace":{"id":1},"grouped":["0xaaa","0xbbb"]}'
+	printf '[{"address":"0xaaa","workspace":{"id":1},"grouped":["0xaaa","0xbbb"]},{"address":"0xbbb","workspace":{"id":1},"grouped":["0xaaa","0xbbb"]}]\n' >"$clients_json"
+	: >"$state_file"
+
+	if bash "$subject" add; then
+		printf 'Expected add from unmanaged native group to fail.\n' >&2
+		return 1
+	fi
+
+	assert_file_equals "$dispatch_log" ""
+	assert_file_equals "$state_file" ""
+	assert_file_equals "$notify_log" "HyprGroup Active window is already in another native group."
+}
+
 test_move_container_here_moves_remembered_container_to_active_workspace() {
 	reset_logs
 	write_active '{"address":"0x999","monitor":1,"workspace":{"id":2},"grouped":[]}'
@@ -578,6 +660,7 @@ test_reorder_moves_group_window_forward_to_index() {
 		'{"address":"0xbbb","workspace":{"id":1},"grouped":["0xaaa","0xbbb","0xccc"]},' \
 		'{"address":"0xccc","workspace":{"id":1},"grouped":["0xaaa","0xbbb","0xccc"]}]' \
 		>"$clients_json"
+	printf 'anchor\t0xaaa\n' >"$state_file"
 
 	bash "$subject" reorder 0xaaa 2
 
@@ -593,6 +676,7 @@ test_reorder_moves_group_window_backward_to_index() {
 		'{"address":"0xbbb","workspace":{"id":1},"grouped":["0xaaa","0xbbb","0xccc"]},' \
 		'{"address":"0xccc","workspace":{"id":1},"grouped":["0xaaa","0xbbb","0xccc"]}]' \
 		>"$clients_json"
+	printf 'anchor\t0xaaa\n' >"$state_file"
 
 	bash "$subject" reorder 0xccc 0
 
@@ -604,11 +688,28 @@ test_reorder_single_window_container_is_noop() {
 	reset_logs
 	write_active '{"address":"0xaaa","monitor":1,"workspace":{"id":1},"grouped":[]}'
 	printf '[{"address":"0xaaa","workspace":{"id":1},"grouped":[]}]\n' >"$clients_json"
+	printf 'anchor\t0xaaa\n' >"$state_file"
 
 	bash "$subject" reorder 0xaaa 0
 
 	assert_file_equals "$dispatch_log" ""
 	assert_no_notifications
+}
+
+test_reorder_rejects_unmanaged_native_group() {
+	reset_logs
+	write_active '{"address":"0xaaa","monitor":1,"workspace":{"id":1},"grouped":["0xaaa","0xbbb"]}'
+	printf '[{"address":"0xaaa","workspace":{"id":1},"grouped":["0xaaa","0xbbb"]},{"address":"0xbbb","workspace":{"id":1},"grouped":["0xaaa","0xbbb"]}]\n' >"$clients_json"
+	: >"$state_file"
+
+	if bash "$subject" reorder 0xaaa 1; then
+		printf 'Expected reorder from unmanaged native group to fail.\n' >&2
+		return 1
+	fi
+
+	assert_file_equals "$dispatch_log" ""
+	assert_file_equals "$state_file" ""
+	assert_file_equals "$notify_log" "HyprGroup Window is not in the Container."
 }
 
 test_close_active_grouped_window_keeps_anchor() {
@@ -688,6 +789,22 @@ test_close_rejects_window_outside_container() {
 
 	assert_file_equals "$dispatch_log" ""
 	assert_file_equals "$state_file" $'anchor\t0xaaa'
+	assert_file_equals "$notify_log" "HyprGroup Window is not in the Container."
+}
+
+test_jump_rejects_unmanaged_native_group() {
+	reset_logs
+	write_active '{"address":"0xaaa","monitor":1,"workspace":{"id":1},"grouped":["0xaaa","0xbbb"]}'
+	printf '[{"address":"0xaaa","workspace":{"id":1},"grouped":["0xaaa","0xbbb"]},{"address":"0xbbb","workspace":{"id":1},"grouped":["0xaaa","0xbbb"]}]\n' >"$clients_json"
+	: >"$state_file"
+
+	if bash "$subject" jump 0xbbb; then
+		printf 'Expected jump from unmanaged native group to fail.\n' >&2
+		return 1
+	fi
+
+	assert_file_equals "$dispatch_log" ""
+	assert_file_equals "$state_file" ""
 	assert_file_equals "$notify_log" "HyprGroup Window is not in the Container."
 }
 
@@ -772,6 +889,49 @@ test_snapshot_uses_remembered_container_when_focus_is_outside_group() {
 	assert_no_notifications
 }
 
+test_snapshot_ignores_unmanaged_active_native_group() {
+	local output
+
+	reset_logs
+	write_active '{"address":"0xaaa","title":"Manual editor","class":"code","monitor":1,"workspace":{"id":1},"grouped":["0xaaa","0xbbb"]}'
+	printf '[{"address":"0xaaa","title":"Manual editor","class":"code","workspace":{"id":1},"grouped":["0xaaa","0xbbb"]},{"address":"0xbbb","title":"Manual terminal","class":"foot","workspace":{"id":1},"grouped":["0xaaa","0xbbb"]}]\n' >"$clients_json"
+	: >"$state_file"
+
+	output="$(bash "$subject" snapshot)"
+
+	if [[ "$output" != '{"hasContainer":false,"address":"","title":"No Active Window","className":"","grouped":[],"windows":[],"source":"none"}' ]]; then
+		printf 'Unexpected unmanaged snapshot:\n%s\n' "$output" >&2
+		return 1
+	fi
+
+	assert_file_equals "$dispatch_log" ""
+	assert_no_notifications
+}
+
+test_snapshot_prefers_remembered_container_over_unmanaged_active_group() {
+	local output
+
+	reset_logs
+	write_active '{"address":"0x999","title":"Manual editor","class":"code","monitor":1,"workspace":{"id":1},"grouped":["0x999","0x888"]}'
+	printf '%s\n' \
+		'[{"address":"0x111","title":"Editor","class":"code","workspace":{"id":2},"grouped":["0x111","0x222"],"focusHistoryID":8},' \
+		'{"address":"0x222","title":"Tests","class":"foot","workspace":{"id":2},"grouped":["0x111","0x222"],"focusHistoryID":2},' \
+		'{"address":"0x999","title":"Manual editor","class":"code","workspace":{"id":1},"grouped":["0x999","0x888"],"focusHistoryID":0},' \
+		'{"address":"0x888","title":"Manual terminal","class":"foot","workspace":{"id":1},"grouped":["0x999","0x888"],"focusHistoryID":1}]' \
+		>"$clients_json"
+	printf 'anchor\t0x111\n' >"$state_file"
+
+	output="$(bash "$subject" snapshot)"
+
+	if [[ "$output" != '{"hasContainer":true,"address":"0x222","title":"Tests","className":"foot","grouped":["0x111","0x222"],"windows":[{"address":"0x111","title":"Editor","className":"code"},{"address":"0x222","title":"Tests","className":"foot"}],"source":"remembered"}' ]]; then
+		printf 'Unexpected remembered snapshot over unmanaged active group:\n%s\n' "$output" >&2
+		return 1
+	fi
+
+	assert_file_equals "$dispatch_log" ""
+	assert_no_notifications
+}
+
 test_snapshot_uses_recent_remembered_group_member_as_active_window() {
 	local output
 
@@ -798,9 +958,11 @@ test_snapshot_uses_recent_remembered_group_member_as_active_window() {
 test_daemon_writes_runtime_config_with_current_script_path
 test_daemon_runtime_config_respects_command_path_override
 test_lua_setup_derives_default_script_from_loaded_path
+test_lua_setup_routes_cycle_binds_through_script
 test_remove_remembered_one_window_container
 test_remove_native_group_remembers_remaining_window
 test_remove_outside_container_is_noop
+test_remove_unmanaged_native_group_is_noop
 test_remove_selected_remembered_anchor_remembers_remaining_window
 test_remove_rejects_selected_window_outside_container
 test_select_group_window_restores_original_focus_when_focus_is_outside_container
@@ -809,6 +971,7 @@ test_select_rejects_window_outside_container
 test_add_remembered_one_window_container_is_noop
 test_add_new_container_remembers_global_anchor
 test_add_brings_global_container_to_active_workspace
+test_add_rejects_unmanaged_native_group
 test_move_container_here_moves_remembered_container_to_active_workspace
 test_move_container_here_works_without_active_window
 test_move_container_here_is_noop_when_container_is_already_here
@@ -819,16 +982,20 @@ test_move_container_here_reports_failure_when_dispatcher_prints_error
 test_reorder_moves_group_window_forward_to_index
 test_reorder_moves_group_window_backward_to_index
 test_reorder_single_window_container_is_noop
+test_reorder_rejects_unmanaged_native_group
 test_close_active_grouped_window_keeps_anchor
 test_close_remembered_anchor_remembers_remaining_window
 test_close_remembered_active_when_focus_is_outside_group
 test_close_one_window_container_forgets_anchor
 test_close_rejects_window_outside_container
+test_jump_rejects_unmanaged_native_group
 test_next_focuses_remembered_container_when_focus_is_outside_group
 test_prev_focuses_remembered_container_when_focus_is_outside_group
 test_next_with_stale_remembered_container_cleans_anchor_and_does_nothing
 test_prev_without_remembered_container_does_nothing
 test_snapshot_uses_remembered_container_when_focus_is_outside_group
+test_snapshot_ignores_unmanaged_active_native_group
+test_snapshot_prefers_remembered_container_over_unmanaged_active_group
 test_snapshot_uses_recent_remembered_group_member_as_active_window
 
 printf 'hyprgroup CLI tests passed\n'

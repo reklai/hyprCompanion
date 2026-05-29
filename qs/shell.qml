@@ -15,6 +15,7 @@ ShellRoot {
 	property int pointerX: 0
 	property int pointerY: 0
 	property string activeHyprlandAddress: ""
+	property bool activeHyprlandGrouped: false
 	property string snapshotAddress: ""
 	property string snapshotClass: ""
 	property string snapshotSource: "none"
@@ -123,7 +124,7 @@ ShellRoot {
 	}
 
 	function canAddToContainer() {
-		return activeHyprlandAddress.length > 0 && !activeWindowInShownContainer();
+		return activeHyprlandAddress.length > 0 && !activeHyprlandGrouped && !activeWindowInShownContainer();
 	}
 
 	function canMoveContainerHere() {
@@ -216,7 +217,7 @@ ShellRoot {
 		return false;
 	}
 
-	function clearSnapshot() {
+	function clearSnapshot(preserveSelectionIntent) {
 		snapshotAddress = "";
 		snapshotTitle = "No Active Window";
 		snapshotClass = "";
@@ -225,7 +226,10 @@ ShellRoot {
 		snapshotGrouped = [];
 		snapshotWindowDetails = {};
 		selectedAddress = "";
-		selectActiveAfterRefresh = false;
+
+		if (!preserveSelectionIntent) {
+			selectActiveAfterRefresh = false;
+		}
 	}
 
 	function captureActiveWindowFromHyprland() {
@@ -234,20 +238,8 @@ ShellRoot {
 		const grouped = actualGroupedAddresses(ipc && ipc.grouped ? ipc.grouped : [], active ? active.address : "");
 
 		activeHyprlandAddress = active ? active.address : "";
-
-		if (!active || grouped.length === 0) {
-			clearSnapshot();
-			return;
-		}
-
-		snapshotAddress = active.address;
-		snapshotTitle = active.title || "Untitled window";
-		snapshotClass = ipc && ipc.class ? ipc.class : "";
-		snapshotSource = "active";
-		snapshotHasContainer = true;
-		snapshotGrouped = stableGroupedAddresses(grouped);
-		snapshotWindowDetails = {};
-		ensureSelectedWindow();
+		activeHyprlandGrouped = grouped.length > 0;
+		clearSnapshot(true);
 	}
 
 	function applyContainerSnapshot(snapshot) {

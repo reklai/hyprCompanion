@@ -22,10 +22,10 @@ function M.apply(opts)
 	local binds = opts.binds or {}
 	local shell_quote = opts.shell_quote
 
-	bind_if_set(main_mod, binds.mouse_prev, hl.dsp.group.prev({}))
-	bind_if_set(main_mod, binds.mouse_next, hl.dsp.group.next({}))
-	bind_if_set(main_mod, binds.prev, hl.dsp.group.prev({}))
-	bind_if_set(main_mod, binds.next, hl.dsp.group.next({}))
+	bind_if_set(main_mod, binds.mouse_prev, hl.dsp.exec_cmd(shell_quote(script) .. " prev"))
+	bind_if_set(main_mod, binds.mouse_next, hl.dsp.exec_cmd(shell_quote(script) .. " next"))
+	bind_if_set(main_mod, binds.prev, hl.dsp.exec_cmd(shell_quote(script) .. " prev"))
+	bind_if_set(main_mod, binds.next, hl.dsp.exec_cmd(shell_quote(script) .. " next"))
 	bind_if_set(main_mod, binds.menu, hl.dsp.exec_cmd(shell_quote(script) .. " menu"))
 end
 
