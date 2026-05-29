@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+app_name="HyprGroup"
+
+usage() {
+	printf '%s\n' \
+		"Usage: hyprgroup [menu|daemon]" \
+		"" \
+		"Actions:" \
+		"  menu       Toggle the Quickshell action menu" \
+		"  daemon     Start the persistent Quickshell menu process"
+}
+
+notify() {
+	local message="$1"
+
+	if command -v notify-send >/dev/null 2>&1; then
+		notify-send "$app_name" "$message"
+	else
+		printf '%s: %s\n' "$app_name" "$message" >&2
+	fi
+}
+
+script_path() {
+	local script_dir
+	local script_name
+
+	script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+	script_name="$(basename -- "${BASH_SOURCE[0]}")"
+	printf '%s/%s\n' "$script_dir" "$script_name"
+}
+
+command_path() {
+	if [[ -n "${HYPRGROUP_COMMAND_PATH:-}" ]]; then
+		printf '%s\n' "$HYPRGROUP_COMMAND_PATH"
+		return
+	fi
+
+	script_path
+}
+
+qs_dir() {
+	local script_dir
+
+	script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+	printf '%s\n' "${script_dir}/../qs"
+}
+
+js_string() {
+	local value="$1"
+
+	value="${value//\\/\\\\}"
+	value="${value//\"/\\\"}"
+	printf '%s' "$value"
+}
+
+write_qs_runtime_config() {
+	local runtime_file
+	local tmp
+	local command_path
+
+	runtime_file="$(qs_dir)/HyprGroupRuntime.js"
+	tmp="${runtime_file}.$$"
+	command_path="$(js_string "$(command_path)")"
+
+	{
+		printf '%s\n' ".pragma library"
+		printf 'var commandPath = "%s";\n' "$command_path"
+	} >"$tmp"
+	mv "$tmp" "$runtime_file"
+}
+
+qs_running() {
+	quickshell list --path "$(qs_dir)" --any-display 2>/dev/null | grep -q '^Instance '
+}
+
+cursor_position() {
+	local pos
+	local x
+	local y
+
+	if ! pos="$(hyprctl cursorpos 2>/dev/null)"; then
+		return 1
+	fi
+
+	pos="${pos// /}"
+	x="${pos%%,*}"
+	y="${pos#*,}"
+
+	if [[ "$x" =~ ^-?[0-9]+$ && "$y" =~ ^-?[0-9]+$ ]]; then
+		printf '%s %s\n' "$x" "$y"
+		return 0
+	fi
+
+	return 1
+}
+
+daemon() {
+	if ! command -v quickshell >/dev/null 2>&1; then
+		return 1
+	fi
+
+	write_qs_runtime_config || return 1
+
+	if qs_running; then
+		return 0
+	fi
+
+	quickshell --path "$(qs_dir)" --daemonize >/dev/null 2>&1
+}
+
+menu() {
+	local dir
+	local coords
+	local x
+	local y
+
+	dir="$(qs_dir)"
+
+	if ! command -v quickshell >/dev/null 2>&1; then
+		notify "quickshell is required for the menu."
+		return 1
+	fi
+
+	daemon || return 1
+
+	if coords="$(cursor_position)"; then
+		x="${coords% *}"
+		y="${coords#* }"
+		quickshell ipc --path "$dir" --any-display call hyprgroup toggleAt "$x" "$y"
+	else
+		quickshell ipc --path "$dir" --any-display call hyprgroup toggle
+	fi
+}
+
+main() {
+	local action="${1:-menu}"
+
+	case "$action" in
+		menu) menu ;;
+		daemon) daemon ;;
+		-h|--help|help) usage ;;
+		*) usage >&2; return 2 ;;
+	esac
+}
+
+main "$@"
