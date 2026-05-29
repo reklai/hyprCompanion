@@ -5,15 +5,21 @@ app_name="HyprGroup"
 
 usage() {
 	printf '%s\n' \
-		"Usage: hyprgroup [menu|daemon|add|move-here|remove|snapshot]" \
+		"Usage: hyprgroup [menu|daemon|add|move-here|remove|close|select|reorder|snapshot|jump|next|prev]" \
 		"" \
 		"Actions:" \
 		"  menu       Toggle the Quickshell action menu" \
 		"  daemon     Start the persistent Quickshell menu process" \
-		"  add        Add the active window to a native Container" \
+		"  add        Add the active window to the Container if needed" \
 		"  move-here  Move the remembered Container to the active workspace" \
-		"  remove     Remove the active window from its Container" \
-		"  snapshot   Print the active or remembered Container state as JSON"
+		"  remove     Remove the active window from its group" \
+		"  close      Close the active or selected Container window" \
+		"  select     Select a Container window without staying focused there" \
+		"  reorder    Move a group window to a zero-based Container index" \
+		"  snapshot   Print the active or remembered Container state as JSON" \
+		"  jump       Focus a group window by address" \
+		"  next       Focus the next window in the active group" \
+		"  prev       Focus the previous window in the active group"
 }
 
 notify() {
@@ -41,6 +47,37 @@ run_dispatch() {
 	fi
 
 	notify "Hyprland did not accept the container command."
+	return 1
+}
+
+active_window_in_container() {
+	local grouped_count
+	local address
+	local container_address
+
+	if ! command -v jq >/dev/null 2>&1; then
+		return 2
+	fi
+
+	if ! read -r grouped_count address < <(
+		hyprctl activewindow -j 2>/dev/null |
+			jq -r '[((.grouped // []) | length), .address] | @tsv' 2>/dev/null
+	); then
+		return 2
+	fi
+
+	if [[ ! "$grouped_count" =~ ^[0-9]+$ ]]; then
+		return 2
+	fi
+
+	if (( grouped_count > 0 )); then
+		return 0
+	fi
+
+	if container_address="$(container_anchor_address)" && [[ "$address" == "$container_address" ]]; then
+		return 0
+	fi
+
 	return 1
 }
 
@@ -99,7 +136,17 @@ stored_container_anchor_address() {
 	awk '
 		BEGIN { FS = "\t" }
 		$1 == "anchor" && $2 ~ /^0x[0-9a-fA-F]+$/ { print $2; found = 1; exit }
-		END { exit found ? 0 : 1 }
+		NF >= 3 && $3 ~ /^0x[0-9a-fA-F]+$/ { fallback = $3 }
+		END {
+			if (found) {
+				exit 0
+			}
+			if (fallback != "") {
+				print fallback
+				exit 0
+			}
+			exit 1
+		}
 	' "$state"
 }
 
@@ -149,37 +196,6 @@ forget_stale_container_anchor() {
 	fi
 }
 
-active_window_in_container() {
-	local grouped_count
-	local address
-	local container_address
-
-	if ! command -v jq >/dev/null 2>&1; then
-		return 2
-	fi
-
-	if ! read -r grouped_count address < <(
-		hyprctl activewindow -j 2>/dev/null |
-			jq -r '[((.grouped // []) | length), .address] | @tsv' 2>/dev/null
-	); then
-		return 2
-	fi
-
-	if [[ ! "$grouped_count" =~ ^[0-9]+$ ]]; then
-		return 2
-	fi
-
-	if (( grouped_count > 0 )); then
-		return 0
-	fi
-
-	if container_address="$(container_anchor_address)" && [[ "$address" == "$container_address" ]]; then
-		return 0
-	fi
-
-	return 1
-}
-
 active_window_remove_state() {
 	hyprctl activewindow -j 2>/dev/null |
 		jq -r '
@@ -189,6 +205,21 @@ active_window_remove_state() {
 				($active // ""),
 				($grouped | length),
 				([$grouped[] | tostring | select(. != $active)] | .[0] // "")
+			] | @tsv
+		' 2>/dev/null
+}
+
+window_close_state() {
+	local address="$1"
+
+	hyprctl clients -j 2>/dev/null |
+		jq -r --arg address "$address" '
+			(.[] | select(.address == $address)) as $target |
+			($target.grouped // []) as $grouped |
+			[
+				($target.address // ""),
+				($grouped | length),
+				([$grouped[] | tostring | select(. != $address)] | .[0] // "")
 			] | @tsv
 		' 2>/dev/null
 }
@@ -241,6 +272,18 @@ container_snapshot() {
 				}
 			];
 
+		def remembered_active_client($grouped; $clients; $anchor):
+			([
+				$clients[]?
+				| select(.address as $candidate | ($grouped | index($candidate)))
+				| . + {
+					__history_rank: (.focusHistoryID // 999999),
+					__anchor_rank: (if .address == $anchor then 0 else 1 end)
+				}
+			]
+			| sort_by(.__history_rank, .__anchor_rank)
+			| .[0]) // null;
+
 		def snapshot($client; $grouped; $source; $clients):
 			{
 				hasContainer: true,
@@ -261,7 +304,20 @@ container_snapshot() {
 			($clients | map(select(.address == $anchor)) | .[0] // null) as $anchor_client |
 			if ($anchor_client != null) then
 				([($anchor_client.grouped // [])[]? | tostring] | normalize_group(.; $anchor; $clients)) as $remembered_grouped |
-				snapshot($anchor_client; $remembered_grouped; "remembered"; $clients)
+				if ($remembered_grouped | length) > 0 then
+					(remembered_active_client($remembered_grouped; $clients; $anchor) // $anchor_client) as $remembered_client |
+					snapshot($remembered_client; $remembered_grouped; "remembered"; $clients)
+				else
+					{
+						hasContainer: false,
+						address: "",
+						title: "No Active Window",
+						className: "",
+						grouped: [],
+						windows: [],
+						source: "none"
+					}
+				end
 			else
 				{
 					hasContainer: false,
@@ -323,6 +379,41 @@ container_window_addresses() {
 	if (( printed == 0 )) && client_exists "$anchor_address"; then
 		printf '%s\n' "$anchor_address"
 	fi
+}
+
+remembered_container_active_address() {
+	local anchor_address
+
+	anchor_address="$(container_anchor_address)" || return 1
+
+	hyprctl clients -j 2>/dev/null |
+		jq -r --arg anchor "$anchor_address" '
+			def dedupe:
+				reduce .[] as $item ([]; if index($item) then . else . + [$item] end);
+
+			. as $clients |
+			($clients[] | select(.address == $anchor)) as $anchor_client |
+			([($anchor_client.grouped // [])[]? | tostring] |
+				if length == 0 then
+					[$anchor]
+				elif index($anchor) then
+					.
+				else
+					[$anchor] + .
+				end |
+				dedupe) as $grouped |
+			[
+				$clients[]
+				| select(.address as $candidate | ($grouped | index($candidate)))
+				| {
+					address: .address,
+					history: (.focusHistoryID // 999999),
+					anchor_rank: (if .address == $anchor then 0 else 1 end)
+				}
+			]
+			| sort_by(.history, .anchor_rank)
+			| .[0].address // empty
+		' 2>/dev/null
 }
 
 container_direction_on_active_workspace() {
@@ -513,7 +604,229 @@ move_container_here() {
 	}
 }
 
+focus_visible_container_for_cycle() {
+	local state
+	local address
+
+	if ! command -v jq >/dev/null 2>&1; then
+		return 1
+	fi
+
+	forget_stale_container_anchor
+
+	if active_window_in_container; then
+		return 0
+	else
+		state=$?
+	fi
+
+	if [[ "$state" -ne 1 ]]; then
+		return 0
+	fi
+
+	address="$(remembered_container_active_address || true)"
+
+	if [[ "$address" =~ ^0x[0-9a-fA-F]+$ ]]; then
+		run_dispatch "hl.dsp.focus({ window = \"address:${address}\" })" || return 1
+		return 0
+	fi
+
+	return 1
+}
+
+cycle_window() {
+	local direction="$1"
+
+	focus_visible_container_for_cycle || return 0
+	run_dispatch "hl.dsp.group.${direction}({})"
+}
+
+next_window() {
+	cycle_window next
+}
+
+prev_window() {
+	cycle_window prev
+}
+
+close_target_address() {
+	if active_window_in_container; then
+		active_window_address
+		return
+	fi
+
+	remembered_container_active_address
+}
+
+group_contains_address() {
+	local reference_address="$1"
+	local target_address="$2"
+	local group_addresses=()
+	local group_address
+
+	mapfile -t group_addresses < <(group_addresses_for_window "$reference_address")
+
+	if (( ${#group_addresses[@]} == 0 )); then
+		[[ "$reference_address" == "$target_address" ]]
+		return
+	fi
+
+	for group_address in "${group_addresses[@]}"; do
+		if [[ "$group_address" == "$target_address" ]]; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+container_has_window() {
+	local address="$1"
+	local active_address
+	local anchor_address
+
+	if active_window_in_container; then
+		active_address="$(active_window_address || true)"
+
+		if [[ "$active_address" =~ ^0x[0-9a-fA-F]+$ ]] && group_contains_address "$active_address" "$address"; then
+			return 0
+		fi
+	fi
+
+	anchor_address="$(container_anchor_address || true)"
+
+	if [[ "$anchor_address" =~ ^0x[0-9a-fA-F]+$ ]] && group_contains_address "$anchor_address" "$address"; then
+		return 0
+	fi
+
+	return 1
+}
+
+repair_container_anchor_before_close() {
+	local address="$1"
+	local target_address
+	local grouped_count
+	local remaining_address
+	local anchor_address
+
+	if ! read -r target_address grouped_count remaining_address < <(window_close_state "$address"); then
+		return 1
+	fi
+
+	if [[ "$target_address" != "$address" || ! "$grouped_count" =~ ^[0-9]+$ ]]; then
+		return 1
+	fi
+
+	anchor_address="$(stored_container_anchor_address || true)"
+
+	if (( grouped_count > 0 )); then
+		if [[ "$remaining_address" =~ ^0x[0-9a-fA-F]+$ ]]; then
+			if [[ -z "$anchor_address" || "$anchor_address" == "$address" ]]; then
+				remember_container_anchor "$remaining_address" || true
+			fi
+		elif [[ -z "$anchor_address" || "$anchor_address" == "$address" ]]; then
+			forget_container_anchor || true
+		fi
+
+		return 0
+	fi
+
+	if [[ "$anchor_address" == "$address" ]]; then
+		forget_container_anchor || true
+	fi
+}
+
+focus_window_if_needed() {
+	local address="$1"
+	local active_address
+
+	active_address="$(active_window_address || true)"
+
+	if [[ "$active_address" == "$address" ]]; then
+		return 0
+	fi
+
+	run_dispatch "hl.dsp.focus({ window = \"address:${address}\" })"
+}
+
+select_window() {
+	local address="${1:-}"
+	local original_address
+	local restore_original=false
+
+	if [[ ! "$address" =~ ^0x[0-9a-fA-F]+$ ]]; then
+		notify "Invalid window address."
+		return 1
+	fi
+
+	if ! command -v jq >/dev/null 2>&1; then
+		notify "Could not inspect the Container."
+		return 1
+	fi
+
+	forget_stale_container_anchor
+
+	if ! client_exists "$address"; then
+		notify "Window is not available."
+		return 1
+	fi
+
+	if ! container_has_window "$address"; then
+		notify "Window is not in the Container."
+		return 1
+	fi
+
+	original_address="$(active_window_address || true)"
+
+	if [[ "$original_address" =~ ^0x[0-9a-fA-F]+$ && "$original_address" != "$address" ]]; then
+		if ! group_contains_address "$address" "$original_address"; then
+			restore_original=true
+		fi
+	fi
+
+	run_dispatch "hl.dsp.focus({ window = \"address:${address}\" })" || return 1
+
+	if [[ "$restore_original" == true ]] && client_exists "$original_address"; then
+		run_dispatch "hl.dsp.focus({ window = \"address:${original_address}\" })" || true
+	fi
+}
+
+close_window() {
+	local address="${1:-}"
+
+	if ! command -v jq >/dev/null 2>&1; then
+		notify "Could not inspect the Container."
+		return 1
+	fi
+
+	forget_stale_container_anchor
+
+	if [[ -z "$address" ]]; then
+		address="$(close_target_address || true)"
+	fi
+
+	if [[ ! "$address" =~ ^0x[0-9a-fA-F]+$ ]]; then
+		notify "No Container window to close."
+		return 1
+	fi
+
+	if ! client_exists "$address"; then
+		notify "Window is not available."
+		return 1
+	fi
+
+	if ! container_has_window "$address"; then
+		notify "Window is not in the Container."
+		return 1
+	fi
+
+	focus_window_if_needed "$address" || return 1
+	repair_container_anchor_before_close "$address" || true
+	run_dispatch 'hl.dsp.window.close({})'
+}
+
 remove_window() {
+	local address="${1:-}"
 	local active_address
 	local grouped_count
 	local remaining_address
@@ -525,6 +838,11 @@ remove_window() {
 	fi
 
 	forget_stale_container_anchor
+
+	if [[ -n "$address" ]]; then
+		remove_window_by_address "$address"
+		return
+	fi
 
 	if ! read -r active_address grouped_count remaining_address < <(active_window_remove_state); then
 		notify "Could not inspect the active window."
@@ -555,6 +873,177 @@ remove_window() {
 	fi
 
 	return 0
+}
+
+remove_window_by_address() {
+	local address="$1"
+	local target_address
+	local grouped_count
+	local remaining_address
+	local anchor_address
+
+	if [[ ! "$address" =~ ^0x[0-9a-fA-F]+$ ]]; then
+		notify "Invalid window address."
+		return 1
+	fi
+
+	if ! client_exists "$address"; then
+		notify "Window is not available."
+		return 1
+	fi
+
+	if ! container_has_window "$address"; then
+		notify "Window is not in the Container."
+		return 1
+	fi
+
+	if ! read -r target_address grouped_count remaining_address < <(window_close_state "$address"); then
+		notify "Could not inspect the Container."
+		return 1
+	fi
+
+	if [[ "$target_address" != "$address" || ! "$grouped_count" =~ ^[0-9]+$ ]]; then
+		notify "Could not inspect the Container."
+		return 1
+	fi
+
+	if (( grouped_count > 0 )); then
+		focus_window_if_needed "$address" || return 1
+		run_dispatch 'hl.dsp.window.move({ out_of_group = true })' || return 1
+
+		anchor_address="$(stored_container_anchor_address || true)"
+
+		if [[ "$remaining_address" =~ ^0x[0-9a-fA-F]+$ ]]; then
+			if [[ -z "$anchor_address" || "$anchor_address" == "$address" ]]; then
+				remember_container_anchor "$remaining_address" || true
+			fi
+		elif [[ -z "$anchor_address" || "$anchor_address" == "$address" ]]; then
+			forget_container_anchor || true
+		fi
+
+		return 0
+	fi
+
+	anchor_address="$(stored_container_anchor_address || true)"
+
+	if [[ "$anchor_address" == "$address" ]]; then
+		forget_container_anchor || true
+	fi
+}
+
+move_group_window() {
+	local address="$1"
+	local forward="$2"
+
+	run_dispatch "hl.dsp.group.move_window({ forward = ${forward}, window = \"address:${address}\" })"
+}
+
+reorder_window() {
+	local address="${1:-}"
+	local target_index="${2:-}"
+	local group_addresses=()
+	local source_index=-1
+	local group_count
+	local steps
+	local i
+
+	if [[ ! "$address" =~ ^0x[0-9a-fA-F]+$ ]]; then
+		notify "Invalid window address."
+		return 1
+	fi
+
+	if [[ ! "$target_index" =~ ^[0-9]+$ ]]; then
+		notify "Invalid Container index."
+		return 1
+	fi
+
+	if ! command -v jq >/dev/null 2>&1; then
+		notify "Could not inspect the Container."
+		return 1
+	fi
+
+	mapfile -t group_addresses < <(group_addresses_for_window "$address")
+	group_count="${#group_addresses[@]}"
+
+	if (( group_count < 2 )); then
+		return 0
+	fi
+
+	for i in "${!group_addresses[@]}"; do
+		if [[ "${group_addresses[$i]}" == "$address" ]]; then
+			source_index="$i"
+			break
+		fi
+	done
+
+	if (( source_index < 0 )); then
+		notify "Window is not in a Container."
+		return 1
+	fi
+
+	if (( target_index >= group_count )); then
+		target_index=$((group_count - 1))
+	fi
+
+	if (( source_index == target_index )); then
+		return 0
+	fi
+
+	if (( source_index < target_index )); then
+		steps=$((target_index - source_index))
+
+		for ((i = 0; i < steps; i++)); do
+			move_group_window "$address" true || return 1
+		done
+	else
+		steps=$((source_index - target_index))
+
+		for ((i = 0; i < steps; i++)); do
+			move_group_window "$address" false || return 1
+		done
+	fi
+}
+
+jump_window() {
+	local address="${1:-}"
+
+	if [[ ! "$address" =~ ^0x[0-9a-fA-F]+$ ]]; then
+		notify "Invalid window address."
+		return 1
+	fi
+
+	run_dispatch "hl.dsp.focus({ window = \"address:${address}\" })"
+}
+
+wofi_menu() {
+	local choice
+
+	if ! command -v wofi >/dev/null 2>&1; then
+		notify "wofi is required for the menu."
+		return 1
+	fi
+
+	choice="$(
+		printf '%s\n' \
+			"Add to Container" \
+			"Move Container Here" \
+			"Remove from Container" \
+			"Close Window Inside Container" \
+			"Prev" \
+			"Next" |
+			wofi --dmenu --prompt "$app_name"
+	)" || return 0
+
+	case "$choice" in
+		"Add to Container") add_to_group ;;
+		"Move Container Here") move_container_here ;;
+		"Remove from Container") remove_window ;;
+		"Close Window Inside Container") close_window ;;
+		"Prev") prev_window ;;
+		"Next") next_window ;;
+		"") return 0 ;;
+		*) notify "Unknown menu action: $choice"; return 1 ;;
+	esac
 }
 
 qs_dir() {
@@ -635,20 +1124,19 @@ menu() {
 
 	dir="$(qs_dir)"
 
-	if ! command -v quickshell >/dev/null 2>&1; then
-		notify "quickshell is required for the menu."
-		return 1
+	if command -v quickshell >/dev/null 2>&1; then
+		daemon || return 1
+		if coords="$(cursor_position)"; then
+			x="${coords% *}"
+			y="${coords#* }"
+			quickshell ipc --path "$dir" --any-display call hyprgroup toggleAt "$x" "$y"
+		else
+			quickshell ipc --path "$dir" --any-display call hyprgroup toggle
+		fi
+		return 0
 	fi
 
-	daemon || return 1
-
-	if coords="$(cursor_position)"; then
-		x="${coords% *}"
-		y="${coords#* }"
-		quickshell ipc --path "$dir" --any-display call hyprgroup toggleAt "$x" "$y"
-	else
-		quickshell ipc --path "$dir" --any-display call hyprgroup toggle
-	fi
+	wofi_menu
 }
 
 main() {
@@ -659,8 +1147,14 @@ main() {
 		daemon) daemon ;;
 		add) add_to_group ;;
 		move-here) move_container_here ;;
-		remove) remove_window ;;
+		close) close_window "${2:-}" ;;
+		select) select_window "${2:-}" ;;
+		reorder) reorder_window "${2:-}" "${3:-}" ;;
 		snapshot) container_snapshot ;;
+		jump) jump_window "${2:-}" ;;
+		next) next_window ;;
+		prev) prev_window ;;
+		remove) remove_window "${2:-}" ;;
 		-h|--help|help) usage ;;
 		*) usage >&2; return 2 ;;
 	esac
