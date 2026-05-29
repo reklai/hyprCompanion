@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-app_name="HyprGroup"
+app_name="HyprCompanion"
 
 usage() {
 	printf '%s\n' \
-		"Usage: hyprgroup [menu|daemon|add|move-here|remove|close|select|reorder|snapshot|jump|next|prev]" \
+		"Usage: hyprcompanion [menu|daemon|add|move-here|remove|close|select|reorder|snapshot|jump|next|prev]" \
 		"" \
 		"Actions:" \
 		"  menu       Toggle the Quickshell action menu" \
@@ -107,7 +107,7 @@ active_window_in_native_group() {
 }
 
 state_file() {
-	printf '%s\n' "${XDG_RUNTIME_DIR:-/tmp}/hyprgroup-containers.tsv"
+	printf '%s\n' "${XDG_RUNTIME_DIR:-/tmp}/hyprcompanion-containers.tsv"
 }
 
 script_path() {
@@ -120,8 +120,8 @@ script_path() {
 }
 
 command_path() {
-	if [[ -n "${HYPRGROUP_COMMAND_PATH:-}" ]]; then
-		printf '%s\n' "$HYPRGROUP_COMMAND_PATH"
+	if [[ -n "${HYPRCOMPANION_COMMAND_PATH:-}" ]]; then
+		printf '%s\n' "$HYPRCOMPANION_COMMAND_PATH"
 		return
 	fi
 
@@ -1087,7 +1087,7 @@ write_qs_runtime_config() {
 	local tmp
 	local command_path
 
-	runtime_file="$(qs_dir)/HyprGroupRuntime.js"
+	runtime_file="$(qs_dir)/HyprCompanionRuntime.js"
 	tmp="${runtime_file}.$$"
 	command_path="$(js_string "$(command_path)")"
 
@@ -1150,9 +1150,9 @@ menu() {
 		if coords="$(cursor_position)"; then
 			x="${coords% *}"
 			y="${coords#* }"
-			quickshell ipc --path "$dir" --any-display call hyprgroup toggleAt "$x" "$y"
+			quickshell ipc --path "$dir" --any-display call hyprcompanion toggleAt "$x" "$y"
 		else
-			quickshell ipc --path "$dir" --any-display call hyprgroup toggle
+			quickshell ipc --path "$dir" --any-display call hyprcompanion toggle
 		fi
 		return 0
 	fi

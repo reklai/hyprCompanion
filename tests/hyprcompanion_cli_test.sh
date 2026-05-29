@@ -2,10 +2,10 @@
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-subject="${repo_root}/bin/hyprgroup"
+subject="${repo_root}/bin/hyprcompanion"
 tmp_dir="$(mktemp -d)"
-runtime_config_file="${repo_root}/qs/HyprGroupRuntime.js"
-runtime_config_backup="${tmp_dir}/HyprGroupRuntime.js.backup"
+runtime_config_file="${repo_root}/qs/HyprCompanionRuntime.js"
+runtime_config_backup="${tmp_dir}/HyprCompanionRuntime.js.backup"
 runtime_config_had_file=false
 
 if [[ -f "$runtime_config_file" ]]; then
@@ -47,13 +47,13 @@ set -euo pipefail
 
 case "${1:-}" in
 	activewindow)
-		cat "$HYPRGROUP_TEST_ACTIVE_JSON"
+		cat "$HYPRCOMPANION_TEST_ACTIVE_JSON"
 		;;
 	activeworkspace)
-		cat "$HYPRGROUP_TEST_ACTIVE_WORKSPACE_JSON"
+		cat "$HYPRCOMPANION_TEST_ACTIVE_WORKSPACE_JSON"
 		;;
 	clients)
-		cat "$HYPRGROUP_TEST_CLIENTS_JSON"
+		cat "$HYPRCOMPANION_TEST_CLIENTS_JSON"
 		;;
 	dispatch)
 		dispatcher="${2:-}"
@@ -65,13 +65,13 @@ case "${1:-}" in
 			command="$dispatcher"
 		fi
 
-		printf '%s\n' "$command" >>"$HYPRGROUP_TEST_DISPATCH_LOG"
+		printf '%s\n' "$command" >>"$HYPRCOMPANION_TEST_DISPATCH_LOG"
 
-		if [[ -n "${HYPRGROUP_TEST_FAIL_DISPATCH:-}" && "$command" == *"$HYPRGROUP_TEST_FAIL_DISPATCH"* ]]; then
+		if [[ -n "${HYPRCOMPANION_TEST_FAIL_DISPATCH:-}" && "$command" == *"$HYPRCOMPANION_TEST_FAIL_DISPATCH"* ]]; then
 			exit 1
 		fi
 
-		if [[ -n "${HYPRGROUP_TEST_ERROR_DISPATCH:-}" && "$command" == *"$HYPRGROUP_TEST_ERROR_DISPATCH"* ]]; then
+		if [[ -n "${HYPRCOMPANION_TEST_ERROR_DISPATCH:-}" && "$command" == *"$HYPRCOMPANION_TEST_ERROR_DISPATCH"* ]]; then
 			printf 'error: fake dispatcher parse error\n'
 			exit 0
 		fi
@@ -80,23 +80,23 @@ case "${1:-}" in
 			workspace="${BASH_REMATCH[1]}"
 			if [[ "$command" =~ window[[:space:]]*=[[:space:]]*\"address:(0x[0-9a-fA-F]+)\" ]]; then
 				address="${BASH_REMATCH[1]}"
-				tmp="${HYPRGROUP_TEST_CLIENTS_JSON}.$$"
-				jq --arg address "$address" --argjson workspace "$workspace" 'map(if .address == $address then (.workspace.id = $workspace) else . end)' "$HYPRGROUP_TEST_CLIENTS_JSON" >"$tmp"
-				mv "$tmp" "$HYPRGROUP_TEST_CLIENTS_JSON"
+				tmp="${HYPRCOMPANION_TEST_CLIENTS_JSON}.$$"
+				jq --arg address "$address" --argjson workspace "$workspace" 'map(if .address == $address then (.workspace.id = $workspace) else . end)' "$HYPRCOMPANION_TEST_CLIENTS_JSON" >"$tmp"
+				mv "$tmp" "$HYPRCOMPANION_TEST_CLIENTS_JSON"
 			else
-				address="$(jq -r '.address' "$HYPRGROUP_TEST_ACTIVE_JSON")"
-				tmp="${HYPRGROUP_TEST_CLIENTS_JSON}.$$"
-				jq --arg address "$address" --argjson workspace "$workspace" 'map(if .address == $address then (.workspace.id = $workspace) else . end)' "$HYPRGROUP_TEST_CLIENTS_JSON" >"$tmp"
-				mv "$tmp" "$HYPRGROUP_TEST_CLIENTS_JSON"
-				tmp="${HYPRGROUP_TEST_ACTIVE_JSON}.$$"
-				jq --argjson workspace "$workspace" '.workspace.id = $workspace' "$HYPRGROUP_TEST_ACTIVE_JSON" >"$tmp"
-				mv "$tmp" "$HYPRGROUP_TEST_ACTIVE_JSON"
+				address="$(jq -r '.address' "$HYPRCOMPANION_TEST_ACTIVE_JSON")"
+				tmp="${HYPRCOMPANION_TEST_CLIENTS_JSON}.$$"
+				jq --arg address "$address" --argjson workspace "$workspace" 'map(if .address == $address then (.workspace.id = $workspace) else . end)' "$HYPRCOMPANION_TEST_CLIENTS_JSON" >"$tmp"
+				mv "$tmp" "$HYPRCOMPANION_TEST_CLIENTS_JSON"
+				tmp="${HYPRCOMPANION_TEST_ACTIVE_JSON}.$$"
+				jq --argjson workspace "$workspace" '.workspace.id = $workspace' "$HYPRCOMPANION_TEST_ACTIVE_JSON" >"$tmp"
+				mv "$tmp" "$HYPRCOMPANION_TEST_ACTIVE_JSON"
 			fi
 		elif [[ "$command" =~ address:(0x[0-9a-fA-F]+) ]]; then
 			address="${BASH_REMATCH[1]}"
-			jq --arg address "$address" '.[] | select(.address == $address)' "$HYPRGROUP_TEST_CLIENTS_JSON" >"$HYPRGROUP_TEST_ACTIVE_JSON"
-		elif [[ "$command" == *"into_or_create_group"* && -n "${HYPRGROUP_TEST_ACTIVE_AFTER_MOVE_JSON:-}" && -f "$HYPRGROUP_TEST_ACTIVE_AFTER_MOVE_JSON" ]]; then
-			cat "$HYPRGROUP_TEST_ACTIVE_AFTER_MOVE_JSON" >"$HYPRGROUP_TEST_ACTIVE_JSON"
+			jq --arg address "$address" '.[] | select(.address == $address)' "$HYPRCOMPANION_TEST_CLIENTS_JSON" >"$HYPRCOMPANION_TEST_ACTIVE_JSON"
+		elif [[ "$command" == *"into_or_create_group"* && -n "${HYPRCOMPANION_TEST_ACTIVE_AFTER_MOVE_JSON:-}" && -f "$HYPRCOMPANION_TEST_ACTIVE_AFTER_MOVE_JSON" ]]; then
+			cat "$HYPRCOMPANION_TEST_ACTIVE_AFTER_MOVE_JSON" >"$HYPRCOMPANION_TEST_ACTIVE_JSON"
 		fi
 		;;
 	cursorpos)
@@ -112,14 +112,14 @@ MOCK
 cat >"${mock_bin}/notify-send" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' "$*" >>"$HYPRGROUP_TEST_NOTIFY_LOG"
+printf '%s\n' "$*" >>"$HYPRCOMPANION_TEST_NOTIFY_LOG"
 MOCK
 
 cat >"${mock_bin}/quickshell" <<'MOCK'
 #!/usr/bin/env bash
 set -euo pipefail
 
-printf '%s\n' "$*" >>"$HYPRGROUP_TEST_QUICKSHELL_LOG"
+printf '%s\n' "$*" >>"$HYPRCOMPANION_TEST_QUICKSHELL_LOG"
 
 case "${1:-}" in
 	list)
@@ -140,26 +140,26 @@ MOCK
 
 chmod +x "${mock_bin}/hyprctl" "${mock_bin}/notify-send" "${mock_bin}/quickshell"
 
-export HYPRGROUP_TEST_ACTIVE_JSON="$active_json"
-export HYPRGROUP_TEST_ACTIVE_AFTER_MOVE_JSON="$active_after_move_json"
-export HYPRGROUP_TEST_ACTIVE_WORKSPACE_JSON="$active_workspace_json"
-export HYPRGROUP_TEST_CLIENTS_JSON="$clients_json"
-export HYPRGROUP_TEST_DISPATCH_LOG="$dispatch_log"
-export HYPRGROUP_TEST_ERROR_DISPATCH=""
-export HYPRGROUP_TEST_FAIL_DISPATCH=""
-export HYPRGROUP_TEST_NOTIFY_LOG="$notify_log"
-export HYPRGROUP_TEST_QUICKSHELL_LOG="$quickshell_log"
+export HYPRCOMPANION_TEST_ACTIVE_JSON="$active_json"
+export HYPRCOMPANION_TEST_ACTIVE_AFTER_MOVE_JSON="$active_after_move_json"
+export HYPRCOMPANION_TEST_ACTIVE_WORKSPACE_JSON="$active_workspace_json"
+export HYPRCOMPANION_TEST_CLIENTS_JSON="$clients_json"
+export HYPRCOMPANION_TEST_DISPATCH_LOG="$dispatch_log"
+export HYPRCOMPANION_TEST_ERROR_DISPATCH=""
+export HYPRCOMPANION_TEST_FAIL_DISPATCH=""
+export HYPRCOMPANION_TEST_NOTIFY_LOG="$notify_log"
+export HYPRCOMPANION_TEST_QUICKSHELL_LOG="$quickshell_log"
 export PATH="${mock_bin}:${PATH}"
 export XDG_RUNTIME_DIR="$runtime_dir"
 
-state_file="${runtime_dir}/hyprgroup-containers.tsv"
+state_file="${runtime_dir}/hyprcompanion-containers.tsv"
 
 reset_logs() {
 	: >"$dispatch_log"
 	: >"$notify_log"
 	: >"$quickshell_log"
-	HYPRGROUP_TEST_ERROR_DISPATCH=""
-	HYPRGROUP_TEST_FAIL_DISPATCH=""
+	HYPRCOMPANION_TEST_ERROR_DISPATCH=""
+	HYPRCOMPANION_TEST_FAIL_DISPATCH=""
 	rm -f "$active_after_move_json"
 }
 
@@ -207,15 +207,25 @@ test_daemon_writes_runtime_config_with_current_script_path() {
 }
 
 test_daemon_runtime_config_respects_command_path_override() {
-	local override="${tmp_dir}/custom/hyprgroup"
+	local override="${tmp_dir}/custom/hyprcompanion"
 
 	reset_logs
 	rm -f "$runtime_config_file"
 
-	HYPRGROUP_COMMAND_PATH="$override" bash "$subject" daemon
+	HYPRCOMPANION_COMMAND_PATH="$override" bash "$subject" daemon
 
 	assert_file_equals "$runtime_config_file" $'.pragma library\nvar commandPath = "'"$override"$'";'
 	assert_file_equals "$quickshell_log" $'list --path '"${repo_root}"$'/bin/../qs --any-display\n--path '"${repo_root}"$'/bin/../qs --daemonize'
+}
+
+test_menu_calls_hyprcompanion_ipc_target() {
+	reset_logs
+	rm -f "$runtime_config_file"
+
+	bash "$subject" menu
+
+	assert_file_equals "$runtime_config_file" $'.pragma library\nvar commandPath = "'"$subject"$'";'
+	assert_file_equals "$quickshell_log" $'list --path '"${repo_root}"$'/bin/../qs --any-display\n--path '"${repo_root}"$'/bin/../qs --daemonize\nipc --path '"${repo_root}"$'/bin/../qs --any-display call hyprcompanion toggleAt 100 100'
 }
 
 test_lua_setup_derives_default_script_from_loaded_path() {
@@ -251,7 +261,7 @@ hl.dsp = {
 	},
 }
 
-dofile("${repo_root}/lua/hyprgroup.lua").setup({
+dofile("${repo_root}/lua/hyprcompanion.lua").setup({
 	binds = {
 		menu = "G",
 		next = "",
@@ -263,7 +273,7 @@ dofile("${repo_root}/lua/hyprgroup.lua").setup({
 LUA
 	)"
 
-	expected="HYPRGROUP_COMMAND_PATH='${subject}' '${subject}' daemon"
+	expected="HYPRCOMPANION_COMMAND_PATH='${subject}' '${subject}' daemon"
 	expected+=$'\n'
 	expected+="SUPER + G => exec:'${subject}' menu"
 
@@ -298,7 +308,7 @@ hl.dsp = {
 	end,
 }
 
-dofile("${repo_root}/lua/hyprgroup.lua").setup({
+dofile("${repo_root}/lua/hyprcompanion.lua").setup({
 	binds = {
 		menu = "",
 		next = "backslash",
@@ -310,7 +320,7 @@ dofile("${repo_root}/lua/hyprgroup.lua").setup({
 LUA
 	)"
 
-	expected="HYPRGROUP_COMMAND_PATH='${subject}' '${subject}' daemon"
+	expected="HYPRCOMPANION_COMMAND_PATH='${subject}' '${subject}' daemon"
 	expected+=$'\n'
 	expected+="SUPER + mouse_down => exec:'${subject}' prev"
 	expected+=$'\n'
@@ -412,7 +422,7 @@ test_remove_rejects_selected_window_outside_container() {
 
 	assert_file_equals "$dispatch_log" ""
 	assert_file_equals "$state_file" $'anchor\t0xaaa'
-	assert_file_equals "$notify_log" "HyprGroup Window is not in the Container."
+	assert_file_equals "$notify_log" "HyprCompanion Window is not in the Container."
 }
 
 test_select_group_window_restores_original_focus_when_focus_is_outside_container() {
@@ -465,7 +475,7 @@ test_select_rejects_window_outside_container() {
 
 	assert_file_equals "$dispatch_log" ""
 	assert_file_equals "$state_file" $'anchor\t0xaaa'
-	assert_file_equals "$notify_log" "HyprGroup Window is not in the Container."
+	assert_file_equals "$notify_log" "HyprCompanion Window is not in the Container."
 }
 
 test_add_remembered_one_window_container_is_noop() {
@@ -524,7 +534,7 @@ test_add_rejects_unmanaged_native_group() {
 
 	assert_file_equals "$dispatch_log" ""
 	assert_file_equals "$state_file" ""
-	assert_file_equals "$notify_log" "HyprGroup Active window is already in another native group."
+	assert_file_equals "$notify_log" "HyprCompanion Active window is already in another native group."
 }
 
 test_move_container_here_moves_remembered_container_to_active_workspace() {
@@ -591,7 +601,7 @@ test_move_container_here_rejects_without_remembered_container() {
 
 	assert_file_equals "$dispatch_log" ""
 	assert_file_equals "$state_file" ""
-	assert_file_equals "$notify_log" "HyprGroup No Container to move."
+	assert_file_equals "$notify_log" "HyprCompanion No Container to move."
 }
 
 test_move_container_here_cleans_stale_anchor() {
@@ -607,7 +617,7 @@ test_move_container_here_cleans_stale_anchor() {
 
 	assert_file_equals "$dispatch_log" ""
 	assert_file_equals "$state_file" ""
-	assert_file_equals "$notify_log" "HyprGroup No Container to move."
+	assert_file_equals "$notify_log" "HyprCompanion No Container to move."
 }
 
 test_move_container_here_reports_failure_when_member_move_fails() {
@@ -619,7 +629,7 @@ test_move_container_here_reports_failure_when_member_move_fails() {
 		'{"address":"0x999","workspace":{"id":2},"grouped":[]}]' \
 		>"$clients_json"
 	printf 'anchor\t0x111\n' >"$state_file"
-	HYPRGROUP_TEST_FAIL_DISPATCH='hl.dsp.window.move({ workspace = 2, window = "address:0x111" })'
+	HYPRCOMPANION_TEST_FAIL_DISPATCH='hl.dsp.window.move({ workspace = 2, window = "address:0x111" })'
 
 	if bash "$subject" move-here; then
 		printf 'Expected move-here dispatch failure to fail.\n' >&2
@@ -628,7 +638,7 @@ test_move_container_here_reports_failure_when_member_move_fails() {
 
 	assert_file_equals "$dispatch_log" 'hl.dsp.window.move({ workspace = 2, window = "address:0x111" })'
 	assert_file_equals "$state_file" $'anchor\t0x111'
-	assert_file_equals "$notify_log" $'HyprGroup Hyprland did not accept the container command.\nHyprGroup Could not move the Container.'
+	assert_file_equals "$notify_log" $'HyprCompanion Hyprland did not accept the container command.\nHyprCompanion Could not move the Container.'
 }
 
 test_move_container_here_reports_failure_when_dispatcher_prints_error() {
@@ -640,7 +650,7 @@ test_move_container_here_reports_failure_when_dispatcher_prints_error() {
 		'{"address":"0x999","workspace":{"id":2},"grouped":[]}]' \
 		>"$clients_json"
 	printf 'anchor\t0x111\n' >"$state_file"
-	HYPRGROUP_TEST_ERROR_DISPATCH='hl.dsp.window.move({ workspace = 2, window = "address:0x111" })'
+	HYPRCOMPANION_TEST_ERROR_DISPATCH='hl.dsp.window.move({ workspace = 2, window = "address:0x111" })'
 
 	if bash "$subject" move-here; then
 		printf 'Expected move-here dispatcher error output to fail.\n' >&2
@@ -649,7 +659,7 @@ test_move_container_here_reports_failure_when_dispatcher_prints_error() {
 
 	assert_file_equals "$dispatch_log" 'hl.dsp.window.move({ workspace = 2, window = "address:0x111" })'
 	assert_file_equals "$state_file" $'anchor\t0x111'
-	assert_file_equals "$notify_log" $'HyprGroup Hyprland did not accept the container command.\nHyprGroup Could not move the Container.'
+	assert_file_equals "$notify_log" $'HyprCompanion Hyprland did not accept the container command.\nHyprCompanion Could not move the Container.'
 }
 
 test_reorder_moves_group_window_forward_to_index() {
@@ -709,7 +719,7 @@ test_reorder_rejects_unmanaged_native_group() {
 
 	assert_file_equals "$dispatch_log" ""
 	assert_file_equals "$state_file" ""
-	assert_file_equals "$notify_log" "HyprGroup Window is not in the Container."
+	assert_file_equals "$notify_log" "HyprCompanion Window is not in the Container."
 }
 
 test_close_active_grouped_window_keeps_anchor() {
@@ -789,7 +799,7 @@ test_close_rejects_window_outside_container() {
 
 	assert_file_equals "$dispatch_log" ""
 	assert_file_equals "$state_file" $'anchor\t0xaaa'
-	assert_file_equals "$notify_log" "HyprGroup Window is not in the Container."
+	assert_file_equals "$notify_log" "HyprCompanion Window is not in the Container."
 }
 
 test_jump_rejects_unmanaged_native_group() {
@@ -805,7 +815,7 @@ test_jump_rejects_unmanaged_native_group() {
 
 	assert_file_equals "$dispatch_log" ""
 	assert_file_equals "$state_file" ""
-	assert_file_equals "$notify_log" "HyprGroup Window is not in the Container."
+	assert_file_equals "$notify_log" "HyprCompanion Window is not in the Container."
 }
 
 test_next_focuses_remembered_container_when_focus_is_outside_group() {
@@ -990,6 +1000,7 @@ test_reorder_targets_dragged_window_not_active_window() {
 
 test_daemon_writes_runtime_config_with_current_script_path
 test_daemon_runtime_config_respects_command_path_override
+test_menu_calls_hyprcompanion_ipc_target
 test_lua_setup_derives_default_script_from_loaded_path
 test_lua_setup_routes_cycle_binds_through_script
 test_remove_remembered_one_window_container
@@ -1033,4 +1044,4 @@ test_snapshot_ignores_unmanaged_active_native_group
 test_snapshot_prefers_remembered_container_over_unmanaged_active_group
 test_snapshot_uses_recent_remembered_group_member_as_active_window
 
-printf 'hyprgroup CLI tests passed\n'
+printf 'hyprcompanion CLI tests passed\n'

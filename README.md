@@ -11,11 +11,11 @@ Use it when several related windows should occupy one workspace slot: editor, te
 - A single remembered Container built on native Hyprland groups.
 - A fast `SUPER + G` Container Menu powered by a resident Quickshell process.
 - Add, move, select, jump, reorder, remove, and close actions for grouped windows.
-- Previous/next cycling through the HyprGroup-managed Container with keyboard and mouse-wheel binds.
+- Previous/next cycling through the HyprCompanion-managed Container with keyboard and mouse-wheel binds.
 - Practical tab names from window title or app class, not raw window addresses.
 - Relocatable install: clone it anywhere and point Hyprland at one Lua file.
 
-HyprGroup manages only the Container anchored through `Add to Container`. Native Hyprland groups created manually outside HyprGroup are left alone: they do not appear in the Container Menu, and HyprGroup actions will not select, cycle, reorder, remove, or close their windows.
+HyprCompanion manages only the Container anchored through `Add to Container`. Native Hyprland groups created manually outside HyprCompanion are left alone: they do not appear in the Container Menu, and HyprCompanion actions will not select, cycle, reorder, remove, or close their windows.
 
 ## Requirements
 
@@ -29,16 +29,16 @@ HyprGroup manages only the Container anchored through `Add to Container`. Native
 
 ## Installation
 
-Clone HyprGroup anywhere:
+Clone HyprCompanion anywhere:
 
 ```sh
-git clone <repo-url> ~/.local/share/hypr/hyprGroup
+git clone <repo-url> ~/.local/share/hypr/hyprCompanion
 ```
 
 Add one line to `hyprland.lua`:
 
 ```lua
-dofile(os.getenv("HOME") .. "/.local/share/hypr/hyprGroup/lua/hyprgroup.lua").setup()
+dofile(os.getenv("HOME") .. "/.local/share/hypr/hyprCompanion/lua/hyprcompanion.lua").setup()
 ```
 
 Reload Hyprland:
@@ -47,15 +47,15 @@ Reload Hyprland:
 hyprctl reload
 ```
 
-HyprGroup resolves its own project path from the loaded Lua file. The daemon writes `qs/HyprGroupRuntime.js` with the resolved command path before Quickshell starts, so moving the plugin only requires updating the `dofile(...)` path.
+HyprCompanion resolves its own project path from the loaded Lua file. The daemon writes `qs/HyprCompanionRuntime.js` with the resolved command path before Quickshell starts, so moving the plugin only requires updating the `dofile(...)` path.
 
 ## Optional Loader
 
-If your dotfiles should keep HyprGroup optional, guard the loader:
+If your dotfiles should keep HyprCompanion optional, guard the loader:
 
 ```lua
-local hyprGroup = "enable"
-local hyprgroup_path = os.getenv("HOME") .. "/.local/share/hypr/hyprGroup/lua/hyprgroup.lua"
+local hyprCompanion = "enable"
+local hyprcompanion_path = os.getenv("HOME") .. "/.local/share/hypr/hyprCompanion/lua/hyprcompanion.lua"
 
 local function path_exists(path)
 	local file = io.open(path, "r")
@@ -67,14 +67,14 @@ local function path_exists(path)
 	return false
 end
 
-if hyprGroup == "enable" and path_exists(hyprgroup_path) then
-	dofile(hyprgroup_path).setup()
+if hyprCompanion == "enable" and path_exists(hyprcompanion_path) then
+	dofile(hyprcompanion_path).setup()
 end
 ```
 
 ## Configuration
 
-User-facing defaults live in `lua/hyprgroup/config.lua`:
+User-facing defaults live in `lua/hyprcompanion/config.lua`:
 
 ```lua
 return {
@@ -90,15 +90,15 @@ return {
 }
 ```
 
-Change keybinds there. After the initial `dofile(...)`, users should not need to edit `bin/`, `qs/`, or their main Hyprland config to customize HyprGroup binds.
+Change keybinds there. After the initial `dofile(...)`, users should not need to edit `bin/`, `qs/`, or their main Hyprland config to customize HyprCompanion binds.
 
 ## Default Binds
 
 - `SUPER + G`: open or close the Container Menu.
-- `SUPER + backslash`: next window in the HyprGroup Container.
-- `SUPER + SHIFT + backslash`: previous window in the HyprGroup Container.
-- `SUPER + mouse_up`: next window in the HyprGroup Container.
-- `SUPER + mouse_down`: previous window in the HyprGroup Container.
+- `SUPER + backslash`: next window in the HyprCompanion Container.
+- `SUPER + SHIFT + backslash`: previous window in the HyprCompanion Container.
+- `SUPER + mouse_up`: next window in the HyprCompanion Container.
+- `SUPER + mouse_down`: previous window in the HyprCompanion Container.
 
 ## Container Menu
 
@@ -106,7 +106,7 @@ Change keybinds there. After the initial `dofile(...)`, users should not need to
 
 ```text
 +----------------------------------------------------------------+
-| HyprGroup                                      <   >   X        |
+| HyprCompanion                                      <   >   X        |
 +--------------------------+-------------------------------------+
 | Add to Container         | Active Container              2 / 3 |
 | Move Container Here      | tests                               |
@@ -118,11 +118,11 @@ Change keybinds there. After the initial `dofile(...)`, users should not need to
 +--------------------------+-------------------------------------+
 ```
 
-The menu describes the single HyprGroup-managed Container. If focus is outside that Container, HyprGroup falls back to the remembered Container, even when that Container is on another workspace. If focus is inside a separate manual Hyprland group, that group is ignored.
+The menu describes the single HyprCompanion-managed Container. If focus is outside that Container, HyprCompanion falls back to the remembered Container, even when that Container is on another workspace. If focus is inside a separate manual Hyprland group, that group is ignored.
 
 ## Actions
 
-- `Add to Container`: move the focused ungrouped window into the remembered Container when possible, or create the first HyprGroup Container. It refuses windows that are already inside a separate native Hyprland group.
+- `Add to Container`: move the focused ungrouped window into the remembered Container when possible, or create the first HyprCompanion Container. It refuses windows that are already inside a separate native Hyprland group.
 - `Move Container Here`: move every live window in the remembered Container to the current workspace.
 - `Remove from Container`: remove the selected grouped window, or forget a one-window Container.
 - `Close Window Inside Container`: close the selected Container window normally.
@@ -133,46 +133,46 @@ The menu describes the single HyprGroup-managed Container. If focus is outside t
 
 ## CLI
 
-The menu and binds call `bin/hyprgroup`, but actions can also be run directly:
+The menu and binds call `bin/hyprcompanion`, but actions can also be run directly:
 
 ```sh
-bin/hyprgroup --help
-bin/hyprgroup daemon
-bin/hyprgroup menu
-bin/hyprgroup add
-bin/hyprgroup move-here
-bin/hyprgroup remove 0x123456
-bin/hyprgroup close 0x123456
-bin/hyprgroup reorder 0x123456 1
-bin/hyprgroup snapshot
-bin/hyprgroup prev
-bin/hyprgroup next
-bin/hyprgroup jump 0x123456
+bin/hyprcompanion --help
+bin/hyprcompanion daemon
+bin/hyprcompanion menu
+bin/hyprcompanion add
+bin/hyprcompanion move-here
+bin/hyprcompanion remove 0x123456
+bin/hyprcompanion close 0x123456
+bin/hyprcompanion reorder 0x123456 1
+bin/hyprcompanion snapshot
+bin/hyprcompanion prev
+bin/hyprcompanion next
+bin/hyprcompanion jump 0x123456
 ```
 
 ## Project Layout
 
 ```text
-bin/hyprgroup                  CLI actions and Quickshell daemon launcher
-lua/hyprgroup.lua              Stable Hyprland entry shim
-lua/hyprgroup/init.lua         Setup orchestration
-lua/hyprgroup/config.lua       User-facing keybind defaults
-lua/hyprgroup/binds.lua        Hyprland bind registration
-lua/hyprgroup/group.lua        Native group and groupbar config
+bin/hyprcompanion                  CLI actions and Quickshell daemon launcher
+lua/hyprcompanion.lua              Stable Hyprland entry shim
+lua/hyprcompanion/init.lua         Setup orchestration
+lua/hyprcompanion/config.lua       User-facing keybind defaults
+lua/hyprcompanion/binds.lua        Hyprland bind registration
+lua/hyprcompanion/group.lua        Native group and groupbar config
 qs/shell.qml                   Quickshell overlay
 qs/components/ActionButton.qml Reusable QML action control
 tests/                         CLI regression tests
 ```
 
-`qs/HyprGroupRuntime.js` is generated by `bin/hyprgroup daemon` and is intentionally ignored by Git.
+`qs/HyprCompanionRuntime.js` is generated by `bin/hyprcompanion daemon` and is intentionally ignored by Git.
 
 ## Development
 
 Run the checks from the project root:
 
 ```sh
-bash -n bin/hyprgroup tests/hyprgroup_cli_test.sh
-bash tests/hyprgroup_cli_test.sh
-luac -p lua/hyprgroup.lua lua/hyprgroup/init.lua lua/hyprgroup/config.lua lua/hyprgroup/binds.lua lua/hyprgroup/group.lua
+bash -n bin/hyprcompanion tests/hyprcompanion_cli_test.sh
+bash tests/hyprcompanion_cli_test.sh
+luac -p lua/hyprcompanion.lua lua/hyprcompanion/init.lua lua/hyprcompanion/config.lua lua/hyprcompanion/binds.lua lua/hyprcompanion/group.lua
 git diff --check
 ```

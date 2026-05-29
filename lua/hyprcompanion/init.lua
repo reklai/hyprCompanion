@@ -1,10 +1,10 @@
 local source = debug.getinfo(1, "S").source:sub(2)
-local module_dir = assert(source:match("(.*/)"), "Could not resolve HyprGroup module path")
+local module_dir = assert(source:match("(.*/)"), "Could not resolve HyprCompanion module path")
 
 local binds = dofile(module_dir .. "binds.lua")
 local group = dofile(module_dir .. "group.lua")
-local project_root = assert(module_dir:match("(.*/)lua/hyprgroup/$"), "Could not resolve HyprGroup project path")
-local default_script = project_root .. "bin/hyprgroup"
+local project_root = assert(module_dir:match("(.*/)lua/hyprcompanion/$"), "Could not resolve HyprCompanion project path")
+local default_script = project_root .. "bin/hyprcompanion"
 
 local M = {}
 
@@ -15,7 +15,7 @@ end
 local function load_config()
 	local config = dofile(module_dir .. "config.lua")
 
-	assert(type(config) == "table", "HyprGroup config.lua must return a table")
+	assert(type(config) == "table", "HyprCompanion config.lua must return a table")
 
 	return config
 end
@@ -47,7 +47,7 @@ function M.setup(opts)
 	local script = config.script or default_script
 
 	group.apply()
-	hl.exec_cmd("HYPRGROUP_COMMAND_PATH=" .. shell_quote(script) .. " " .. shell_quote(script) .. " daemon")
+	hl.exec_cmd("HYPRCOMPANION_COMMAND_PATH=" .. shell_quote(script) .. " " .. shell_quote(script) .. " daemon")
 	binds.apply({
 		main_mod = main_mod,
 		script = script,

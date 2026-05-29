@@ -3,14 +3,14 @@ import Quickshell
 import Quickshell.Hyprland
 import Quickshell.Io
 import Quickshell.Wayland
-import "HyprGroupRuntime.js" as HyprGroupRuntime
+import "HyprCompanionRuntime.js" as HyprCompanionRuntime
 import "components"
 
 ShellRoot {
 	id: root
 
 	property bool menuVisible: false
-	property string commandPath: HyprGroupRuntime.commandPath
+	property string commandPath: HyprCompanionRuntime.commandPath
 	property bool pointerKnown: false
 	property int pointerX: 0
 	property int pointerY: 0
@@ -622,7 +622,7 @@ ShellRoot {
 	}
 
 	IpcHandler {
-		target: "hyprgroup"
+		target: "hyprcompanion"
 
 		function open() {
 			root.openMenu();
@@ -658,7 +658,7 @@ ShellRoot {
 		mask: Region { item: root.menuVisible ? surface : emptyInputRegion }
 		WlrLayershell.layer: WlrLayer.Overlay
 		WlrLayershell.keyboardFocus: root.menuVisible ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
-		WlrLayershell.namespace: "hyprgroup-menu"
+		WlrLayershell.namespace: "hyprcompanion-menu"
 
 		anchors {
 			top: true
@@ -852,7 +852,7 @@ ShellRoot {
 							anchors.right: headerControls.left
 							anchors.rightMargin: 12
 							anchors.verticalCenter: parent.verticalCenter
-							text: "HyprGroup"
+							text: "HyprCompanion"
 							color: "#f8fafc"
 							elide: Text.ElideRight
 							font.pixelSize: 18
