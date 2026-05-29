@@ -1,8 +1,8 @@
-# HyprGroup
+# HyprCompanion
 
 A Hyprland Lua plugin for controlling native groups like tabs.
 
-HyprGroup plugs into the Hyprland ecosystem without replacing Hyprland's window model. It uses native Hyprland groups as the real container layer, then adds focused keybinds, a persistent Quickshell menu, and a vertical Container List for managing grouped windows as one working stack.
+This plugs into the Hyprland ecosystem without replacing Hyprland's window model. It uses native Hyprland groups as the real container layer, then adds focused keybinds, a persistent Quickshell menu, and a vertical Container List for managing grouped windows as one working stack.
 
 Use it when several related windows should occupy one workspace slot: editor, tests, docs, terminal, browser, chat, or any other small workflow cluster.
 
