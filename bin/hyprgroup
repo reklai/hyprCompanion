@@ -65,7 +65,7 @@ active_window_in_container() {
 		return 1
 	fi
 
-	if ! read -r address grouped_has_anchor < <(
+	if ! IFS=$'\t' read -r address grouped_has_anchor < <(
 		hyprctl activewindow -j 2>/dev/null |
 			jq -r --arg anchor "$container_address" '[.address // "", ((.grouped // []) | index($anchor) != null)] | @tsv' 2>/dev/null
 	); then
@@ -84,17 +84,14 @@ active_window_in_container() {
 }
 
 active_window_in_native_group() {
-	local grouped_count
 	local address
+	local grouped_count
 
 	if ! command -v jq >/dev/null 2>&1; then
 		return 2
 	fi
 
-	if ! read -r grouped_count address < <(
-		hyprctl activewindow -j 2>/dev/null |
-			jq -r '[((.grouped // []) | length), .address] | @tsv' 2>/dev/null
-	); then
+	if ! IFS=$'\t' read -r address grouped_count _ < <(active_window_remove_state); then
 		return 2
 	fi
 
@@ -102,7 +99,7 @@ active_window_in_native_group() {
 		return 2
 	fi
 
-	if [[ "$address" =~ ^0x[0-9a-fA-F]+$ ]] && (( grouped_count > 0 )); then
+	if (( grouped_count > 0 )); then
 		return 0
 	fi
 
@@ -271,6 +268,17 @@ container_snapshot() {
 		hyprctl activewindow -j 2>/dev/null
 		hyprctl clients -j 2>/dev/null
 	} | jq -cs --arg anchor "$anchor_address" '
+		def no_container:
+			{
+				hasContainer: false,
+				address: "",
+				title: "No Active Window",
+				className: "",
+				grouped: [],
+				windows: [],
+				source: "none"
+			};
+
 		def dedupe:
 			reduce .[] as $item ([]; if index($item) then . else . + [$item] end);
 
@@ -337,26 +345,10 @@ container_snapshot() {
 					snapshot($remembered_client; $managed_grouped; "remembered"; $clients)
 				end
 			else
-				{
-					hasContainer: false,
-					address: "",
-					title: "No Active Window",
-					className: "",
-					grouped: [],
-					windows: [],
-					source: "none"
-				}
+				no_container
 			end
 		else
-			{
-				hasContainer: false,
-				address: "",
-				title: "No Active Window",
-				className: "",
-				grouped: [],
-				windows: [],
-				source: "none"
-			}
+			no_container
 		end
 	' 2>/dev/null; then
 		empty_snapshot
@@ -461,8 +453,8 @@ container_direction_on_active_workspace() {
 		} | jq -rs --arg container_address "$container_address" '
 			.[0] as $active |
 			.[1] as $clients |
-			($active.at[0] + ($active.size[0] / 2)) as $active_x |
-			($active.at[1] + ($active.size[1] / 2)) as $active_y |
+			(($active.at[0] // 0) + (($active.size[0] // 0) / 2)) as $active_x |
+			(($active.at[1] // 0) + (($active.size[1] // 0) / 2)) as $active_y |
 			[
 				$clients[]
 				| select(.address != $active.address)
@@ -472,8 +464,8 @@ container_direction_on_active_workspace() {
 				| . + {
 					target_rank: (if .address == $container_address then 0 else 1 end),
 					group_count: ((.grouped // []) | length),
-					center_x: (.at[0] + (.size[0] / 2)),
-					center_y: (.at[1] + (.size[1] / 2))
+					center_x: ((.at[0] // 0) + ((.size[0] // 0) / 2)),
+					center_y: ((.at[1] // 0) + ((.size[1] // 0) / 2))
 				}
 				| . + {
 					dx: (.center_x - $active_x),
@@ -653,8 +645,10 @@ focus_visible_container_for_cycle() {
 		state=$?
 	fi
 
+	# state 2 means the active window could not be inspected; do nothing rather
+	# than cycle whatever (possibly unmanaged) group currently has focus.
 	if [[ "$state" -ne 1 ]]; then
-		return 0
+		return 1
 	fi
 
 	address="$(remembered_container_active_address || true)"
@@ -726,20 +720,30 @@ container_has_window() {
 	return 1
 }
 
-repair_container_anchor_before_close() {
+require_container_window() {
 	local address="$1"
-	local target_address
-	local grouped_count
-	local remaining_address
+
+	if ! command -v jq >/dev/null 2>&1; then
+		notify "Could not inspect the Container."
+		return 1
+	fi
+
+	forget_stale_container_anchor
+
+	if ! container_has_window "$address"; then
+		notify "Window is not in the Container."
+		return 1
+	fi
+}
+
+# Re-point or clear the stored anchor after a window leaves the Container.
+# Only reassigns the anchor when it was empty or pointed at the removed window,
+# so removing a non-anchor member never clobbers a still-valid anchor.
+reconcile_anchor_after_removal() {
+	local address="$1"
+	local grouped_count="$2"
+	local remaining_address="$3"
 	local anchor_address
-
-	if ! read -r target_address grouped_count remaining_address < <(window_close_state "$address"); then
-		return 1
-	fi
-
-	if [[ "$target_address" != "$address" || ! "$grouped_count" =~ ^[0-9]+$ ]]; then
-		return 1
-	fi
 
 	anchor_address="$(stored_container_anchor_address || true)"
 
@@ -758,6 +762,23 @@ repair_container_anchor_before_close() {
 	if [[ "$anchor_address" == "$address" ]]; then
 		forget_container_anchor || true
 	fi
+}
+
+repair_container_anchor_before_close() {
+	local address="$1"
+	local target_address
+	local grouped_count
+	local remaining_address
+
+	if ! IFS=$'\t' read -r target_address grouped_count remaining_address < <(window_close_state "$address"); then
+		return 1
+	fi
+
+	if [[ "$target_address" != "$address" || ! "$grouped_count" =~ ^[0-9]+$ ]]; then
+		return 1
+	fi
+
+	reconcile_anchor_after_removal "$address" "$grouped_count" "$remaining_address"
 }
 
 focus_window_if_needed() {
@@ -854,8 +875,6 @@ remove_window() {
 	local active_address
 	local grouped_count
 	local remaining_address
-	local container_address
-	local state=0
 
 	if ! command -v jq >/dev/null 2>&1; then
 		notify "Could not inspect the active window."
@@ -871,18 +890,14 @@ remove_window() {
 
 	if active_window_in_container; then
 		:
+	elif [[ $? -eq 2 ]]; then
+		notify "Could not inspect the active window."
+		return 1
 	else
-		state=$?
-
-		if [[ "$state" -eq 2 ]]; then
-			notify "Could not inspect the active window."
-			return 1
-		fi
-
 		return 0
 	fi
 
-	if ! read -r active_address grouped_count remaining_address < <(active_window_remove_state); then
+	if ! IFS=$'\t' read -r active_address grouped_count remaining_address < <(active_window_remove_state); then
 		notify "Could not inspect the active window."
 		return 1
 	fi
@@ -894,23 +909,9 @@ remove_window() {
 
 	if (( grouped_count > 0 )); then
 		run_dispatch 'hl.dsp.window.move({ out_of_group = true })' || return 1
-
-		if [[ "$remaining_address" =~ ^0x[0-9a-fA-F]+$ ]]; then
-			remember_container_anchor "$remaining_address" || true
-		else
-			forget_container_anchor || true
-		fi
-
-		return 0
 	fi
 
-	container_address="$(container_anchor_address || true)"
-
-	if [[ -n "$container_address" && "$active_address" == "$container_address" ]]; then
-		forget_container_anchor || true
-	fi
-
-	return 0
+	reconcile_anchor_after_removal "$active_address" "$grouped_count" "$remaining_address"
 }
 
 remove_window_by_address() {
@@ -918,7 +919,6 @@ remove_window_by_address() {
 	local target_address
 	local grouped_count
 	local remaining_address
-	local anchor_address
 
 	if [[ ! "$address" =~ ^0x[0-9a-fA-F]+$ ]]; then
 		notify "Invalid window address."
@@ -935,7 +935,7 @@ remove_window_by_address() {
 		return 1
 	fi
 
-	if ! read -r target_address grouped_count remaining_address < <(window_close_state "$address"); then
+	if ! IFS=$'\t' read -r target_address grouped_count remaining_address < <(window_close_state "$address"); then
 		notify "Could not inspect the Container."
 		return 1
 	fi
@@ -948,25 +948,9 @@ remove_window_by_address() {
 	if (( grouped_count > 0 )); then
 		focus_window_if_needed "$address" || return 1
 		run_dispatch 'hl.dsp.window.move({ out_of_group = true })' || return 1
-
-		anchor_address="$(stored_container_anchor_address || true)"
-
-		if [[ "$remaining_address" =~ ^0x[0-9a-fA-F]+$ ]]; then
-			if [[ -z "$anchor_address" || "$anchor_address" == "$address" ]]; then
-				remember_container_anchor "$remaining_address" || true
-			fi
-		elif [[ -z "$anchor_address" || "$anchor_address" == "$address" ]]; then
-			forget_container_anchor || true
-		fi
-
-		return 0
 	fi
 
-	anchor_address="$(stored_container_anchor_address || true)"
-
-	if [[ "$anchor_address" == "$address" ]]; then
-		forget_container_anchor || true
-	fi
+	reconcile_anchor_after_removal "$address" "$grouped_count" "$remaining_address"
 }
 
 move_group_window() {
@@ -995,17 +979,7 @@ reorder_window() {
 		return 1
 	fi
 
-	if ! command -v jq >/dev/null 2>&1; then
-		notify "Could not inspect the Container."
-		return 1
-	fi
-
-	forget_stale_container_anchor
-
-	if ! container_has_window "$address"; then
-		notify "Window is not in the Container."
-		return 1
-	fi
+	require_container_window "$address" || return 1
 
 	mapfile -t group_addresses < <(group_addresses_for_window "$address")
 	group_count="${#group_addresses[@]}"
@@ -1057,17 +1031,7 @@ jump_window() {
 		return 1
 	fi
 
-	if ! command -v jq >/dev/null 2>&1; then
-		notify "Could not inspect the Container."
-		return 1
-	fi
-
-	forget_stale_container_anchor
-
-	if ! container_has_window "$address"; then
-		notify "Window is not in the Container."
-		return 1
-	fi
+	require_container_window "$address" || return 1
 
 	run_dispatch "hl.dsp.focus({ window = \"address:${address}\" })"
 }

@@ -955,6 +955,39 @@ test_snapshot_uses_recent_remembered_group_member_as_active_window() {
 	assert_no_notifications
 }
 
+test_remove_nonanchor_window_keeps_existing_anchor() {
+	reset_logs
+	write_active '{"address":"0xbbb","monitor":1,"workspace":{"id":1},"grouped":["0xbbb","0xccc","0xaaa"]}'
+	printf '%s\n' \
+		'[{"address":"0xbbb","workspace":{"id":1},"grouped":["0xbbb","0xccc","0xaaa"]},' \
+		'{"address":"0xccc","workspace":{"id":1},"grouped":["0xbbb","0xccc","0xaaa"]},' \
+		'{"address":"0xaaa","workspace":{"id":1},"grouped":["0xbbb","0xccc","0xaaa"]}]' \
+		>"$clients_json"
+	printf 'anchor\t0xaaa\n' >"$state_file"
+
+	bash "$subject" remove
+
+	assert_file_equals "$dispatch_log" 'hl.dsp.window.move({ out_of_group = true })'
+	assert_file_equals "$state_file" $'anchor\t0xaaa'
+	assert_no_notifications
+}
+
+test_reorder_targets_dragged_window_not_active_window() {
+	reset_logs
+	write_active '{"address":"0xaaa","monitor":1,"workspace":{"id":1},"grouped":["0xaaa","0xbbb","0xccc"]}'
+	printf '%s\n' \
+		'[{"address":"0xaaa","workspace":{"id":1},"grouped":["0xaaa","0xbbb","0xccc"]},' \
+		'{"address":"0xbbb","workspace":{"id":1},"grouped":["0xaaa","0xbbb","0xccc"]},' \
+		'{"address":"0xccc","workspace":{"id":1},"grouped":["0xaaa","0xbbb","0xccc"]}]' \
+		>"$clients_json"
+	printf 'anchor\t0xaaa\n' >"$state_file"
+
+	bash "$subject" reorder 0xccc 0
+
+	assert_file_equals "$dispatch_log" $'hl.dsp.group.move_window({ forward = false, window = "address:0xccc" })\nhl.dsp.group.move_window({ forward = false, window = "address:0xccc" })'
+	assert_no_notifications
+}
+
 test_daemon_writes_runtime_config_with_current_script_path
 test_daemon_runtime_config_respects_command_path_override
 test_lua_setup_derives_default_script_from_loaded_path
@@ -965,6 +998,7 @@ test_remove_outside_container_is_noop
 test_remove_unmanaged_native_group_is_noop
 test_remove_selected_remembered_anchor_remembers_remaining_window
 test_remove_rejects_selected_window_outside_container
+test_remove_nonanchor_window_keeps_existing_anchor
 test_select_group_window_restores_original_focus_when_focus_is_outside_container
 test_select_group_window_keeps_focus_when_active_is_same_container
 test_select_rejects_window_outside_container
@@ -983,6 +1017,7 @@ test_reorder_moves_group_window_forward_to_index
 test_reorder_moves_group_window_backward_to_index
 test_reorder_single_window_container_is_noop
 test_reorder_rejects_unmanaged_native_group
+test_reorder_targets_dragged_window_not_active_window
 test_close_active_grouped_window_keeps_anchor
 test_close_remembered_anchor_remembers_remaining_window
 test_close_remembered_active_when_focus_is_outside_group

@@ -25,6 +25,7 @@ ShellRoot {
 	property var snapshotWindowDetails: ({})
 	property string selectedAddress: ""
 	property bool selectActiveAfterRefresh: false
+	property bool snapshotRefreshPending: false
 	property bool tabDragActive: false
 	property bool tabPressActive: false
 	property string pressedTabAddress: ""
@@ -185,6 +186,9 @@ ShellRoot {
 		return addresses;
 	}
 
+	// Keeps existing rows in their current order (appending newcomers), used only
+	// while a Prev/Next cycle is in flight so the list does not reflow; otherwise
+	// applyContainerSnapshot trusts the snapshot's native order.
 	function stableGroupedAddresses(nextAddresses) {
 		const stable = [];
 
@@ -232,13 +236,17 @@ ShellRoot {
 		}
 	}
 
-	function captureActiveWindowFromHyprland() {
+	function refreshActiveWindowInfo() {
 		const active = Hyprland.activeToplevel;
 		const ipc = active && active.lastIpcObject ? active.lastIpcObject : null;
 		const grouped = actualGroupedAddresses(ipc && ipc.grouped ? ipc.grouped : [], active ? active.address : "");
 
 		activeHyprlandAddress = active ? active.address : "";
 		activeHyprlandGrouped = grouped.length > 0;
+	}
+
+	function captureActiveWindowFromHyprland() {
+		refreshActiveWindowInfo();
 		clearSnapshot(true);
 	}
 
@@ -253,7 +261,12 @@ ShellRoot {
 		snapshotClass = snapshot.className || "";
 		snapshotSource = String(snapshot.source || "none");
 		snapshotHasContainer = true;
-		snapshotGrouped = stableGroupedAddresses(copyGroupedAddresses(snapshot.grouped));
+		// Trust the snapshot's native group order, except while a Prev/Next cycle
+		// is in flight (selectActiveAfterRefresh) where the list must not reflow.
+		// Stabilizing on every refresh would freeze a stale order after a real
+		// reorder and make drag drop-indices map to the wrong native slot (#3).
+		const nextGrouped = copyGroupedAddresses(snapshot.grouped);
+		snapshotGrouped = selectActiveAfterRefresh ? stableGroupedAddresses(nextGrouped) : nextGrouped;
 		snapshotWindowDetails = snapshotWindowDetailsByAddress(snapshot.windows || []);
 		ensureSelectedWindow();
 	}
@@ -323,11 +336,14 @@ ShellRoot {
 	}
 
 	function captureActiveWindow() {
-		captureActiveWindowFromHyprland();
+		refreshActiveWindowInfo();
 
-		if (!snapshotProcess.running) {
-			snapshotProcess.exec([commandPath, "snapshot"]);
+		if (snapshotProcess.running) {
+			snapshotRefreshPending = true;
+			return;
 		}
+
+		snapshotProcess.exec([commandPath, "snapshot"]);
 	}
 
 	function clientForAddress(address) {
@@ -344,26 +360,27 @@ ShellRoot {
 		return null;
 	}
 
-	function groupWindowEntries() {
+	function buildGroupWindowEntries() {
 		const entries = [];
 
 		for (let i = 0; i < snapshotGrouped.length; i++) {
 			const address = snapshotGrouped[i];
 			const client = clientForAddress(address);
-			const ipc = client && client.lastIpcObject ? client.lastIpcObject : null;
 			const details = snapshotWindowDetailsForAddress(address);
 
 			entries.push({
 				address: address,
-				active: address === snapshotAddress,
-				selected: address === selectedAddress,
-				className: ipc && ipc.class ? ipc.class : details ? details.className : "",
 				title: tabTitle(client, details, i)
 			});
 		}
 
 		return entries;
 	}
+
+	// Cached, and intentionally independent of selectedAddress/snapshotAddress
+	// (those are bound per-delegate) so changing the selection never rebuilds
+	// the tab Repeater's delegates mid-interaction.
+	readonly property var groupWindowEntries: buildGroupWindowEntries()
 
 	function indexForAddress(address) {
 		for (let i = 0; i < snapshotGrouped.length; i++) {
@@ -595,6 +612,11 @@ ShellRoot {
 		onExited: (exitCode, exitStatus) => {
 			if (exitCode !== 0) {
 				root.captureActiveWindowFromHyprland();
+			}
+
+			if (root.snapshotRefreshPending) {
+				root.snapshotRefreshPending = false;
+				root.captureActiveWindow();
 			}
 		}
 	}
@@ -915,7 +937,7 @@ ShellRoot {
 
 										Text {
 											anchors.centerIn: parent
-											visible: root.groupWindowEntries().length === 0
+											visible: root.groupWindowEntries.length === 0
 											text: "No Active Window"
 											color: "#8f949e"
 											elide: Text.ElideRight
@@ -927,7 +949,7 @@ ShellRoot {
 											id: tabFlickable
 											anchors.fill: parent
 											anchors.margins: 6
-											visible: root.groupWindowEntries().length > 0
+											visible: root.groupWindowEntries.length > 0
 											clip: true
 											boundsBehavior: Flickable.StopAtBounds
 											contentWidth: width
@@ -940,12 +962,14 @@ ShellRoot {
 												spacing: root.tabGap
 
 												Repeater {
-													model: root.groupWindowEntries()
+													model: root.groupWindowEntries
 
 													delegate: Item {
 														id: groupTab
 														readonly property bool dragged: root.tabDragActive && root.draggedTabAddress === modelData.address
 														readonly property bool pressed: root.tabPressActive && root.pressedTabAddress === modelData.address
+														readonly property bool selected: modelData.address === root.selectedAddress
+														readonly property bool active: modelData.address === root.snapshotAddress
 
 														width: tabColumn.width
 														height: root.tabHeight
@@ -963,8 +987,8 @@ ShellRoot {
 															anchors.leftMargin: 1
 															anchors.rightMargin: 1
 															anchors.bottomMargin: 1
-															color: groupTab.dragged ? "#4a4234" : groupTab.pressed ? "#3d372d" : modelData.selected ? "#3d3e44" : modelData.active ? "#303238" : "#26272d"
-															border.color: groupTab.dragged ? "#d8b46a" : groupTab.pressed ? "#c59f5a" : modelData.selected ? "#5a5c64" : "#3d3f47"
+															color: groupTab.dragged ? "#4a4234" : groupTab.pressed ? "#3d372d" : groupTab.selected ? "#3d3e44" : groupTab.active ? "#303238" : "#26272d"
+															border.color: groupTab.dragged ? "#d8b46a" : groupTab.pressed ? "#c59f5a" : groupTab.selected ? "#5a5c64" : "#3d3f47"
 															border.width: groupTab.dragged || groupTab.pressed ? 2 : 1
 															radius: 5
 														}
@@ -999,7 +1023,7 @@ ShellRoot {
 															anchors.left: parent.left
 															anchors.leftMargin: 2
 															anchors.verticalCenter: parent.verticalCenter
-															visible: modelData.selected
+															visible: groupTab.selected
 															color: "#d4d4d8"
 															radius: 1
 														}
@@ -1011,11 +1035,11 @@ ShellRoot {
 															anchors.rightMargin: 14
 															anchors.verticalCenter: parent.verticalCenter
 															text: modelData.title
-															color: modelData.selected ? "#f4f4f5" : "#c5c8cf"
+															color: groupTab.selected ? "#f4f4f5" : "#c5c8cf"
 															elide: Text.ElideRight
 															horizontalAlignment: Text.AlignLeft
 															font.pixelSize: 12
-															font.weight: modelData.selected ? Font.DemiBold : Font.Normal
+															font.weight: groupTab.selected ? Font.DemiBold : Font.Normal
 															maximumLineCount: 1
 														}
 
